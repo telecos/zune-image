@@ -137,6 +137,46 @@ loop {
 }
 ```
 
+#### Incremental support policy
+
+Supported:
+
+- Baseline Huffman JPEGs, including interleaved, multi-SOS/non-interleaved, and
+  restart-marker streams. Stable output is reported only for rows that will not
+  be replaced by a later retry.
+- Progressive Huffman JPEGs. Completed scans may be exposed as replaceable
+  full-frame previews; first-DC scans may resume from fine row checkpoints.
+- Sequential and progressive arithmetic JPEGs when the `arith` feature is
+  enabled. Arithmetic progressive scans use scan-boundary replay.
+- Header and scan retries when the same seekable reader can expose a growing
+  prefix while retaining all previously visible bytes.
+
+Intentional fallback and best-effort behavior:
+
+- Progressive AC, refinement, and arithmetic scans replay from the current scan
+  boundary because their coefficient updates are not safe to apply twice.
+- A repeated EOF after resuming a progressive first-DC fine checkpoint falls
+  back to the scan boundary. This avoids retaining partially updated scratch
+  coefficients across multiple incomplete resumes.
+- `DecodeErrors::Cancelled` is not a request for more input, but the operation
+  may be retried after replacing or clearing the cancellation check. Keep using
+  the same decoder and output allocation.
+- Non-strict decoding may accept malformed or non-conforming JPEG data. An error
+  for which `is_recoverable_eof()` returns `true` requests more input;
+  `Cancelled` requests caller intervention; every other error is terminal.
+
+Out of scope:
+
+- Progressive previews are not stable output and must never be appended to a
+  final pixel stream.
+- Replacing the decoder, reader history, or output allocation between retries is
+  unsupported.
+- The crate does not provide downstream FFI bindings. An adapter must preserve
+  the same decoder, growing reader, and output allocation for the full retry
+  loop.
+- Retry latency is not constant. It is bounded by the relevant row/restart
+  checkpoint or, for intentional fallback paths, by replaying the current scan.
+
 ## Goals
 
 The implementation aims to have the following goals achieved,

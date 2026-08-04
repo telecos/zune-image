@@ -199,6 +199,164 @@ fn assert_incremental_decode_matrix(cases: &[(&str, &[u8], usize)]) {
     }
 }
 
+fn assert_incremental_contract(name: &str, data: &[u8], step: usize) {
+    assert!(step > 0, "incremental step must be non-zero");
+
+    let expected = decode_oneshot(data);
+    let limit = Rc::new(Cell::new(0_usize));
+    let cursor = GrowableCursor::new(data, Rc::clone(&limit));
+    let mut decoder = JpegDecoder::new(cursor);
+    decoder.set_incremental_mode(true);
+
+    let mut output = Vec::new();
+    let mut headers_done = false;
+    let mut available = 0_usize;
+    let mut previous_stable_bytes = 0_usize;
+    let mut previous_stable_scanlines = 0_usize;
+    let mut previous_preview_scans = 0_usize;
+
+    loop {
+        available = available.saturating_add(step).min(data.len());
+        limit.set(available);
+
+        if !headers_done {
+            match decoder.decode_headers() {
+                Ok(()) => {
+                    headers_done = true;
+                    output = vec![0; decoder.output_buffer_size().unwrap()];
+                }
+                Err(ref error) if error.is_recoverable_eof() => {
+                    assert!(available < data.len(), "{name}: headers stalled with full input");
+                    continue;
+                }
+                Err(error) => panic!("{name}: unexpected header error at {available}: {error:?}")
+            }
+        }
+
+        match decoder.decode_into(&mut output) {
+            Ok(()) => {
+                assert_eq!(decoder.decoded_output_bytes(), Some(output.len()), "{name}");
+                assert_eq!(
+                    decoder.decoded_scanlines(),
+                    Some(usize::from(decoder.info().unwrap().height)),
+                    "{name}"
+                );
+                assert_pixels_match(&output, &expected, name, available);
+                return;
+            }
+            Err(ref error) if error.is_recoverable_eof() => {
+                let stable_bytes = decoder.decoded_output_bytes().unwrap_or(0);
+                let stable_scanlines = decoder.decoded_scanlines().unwrap_or(0);
+                assert!(
+                    stable_bytes >= previous_stable_bytes,
+                    "{name}: stable bytes regressed from {previous_stable_bytes} to {stable_bytes}"
+                );
+                assert!(
+                    stable_scanlines >= previous_stable_scanlines,
+                    "{name}: stable scanlines regressed from {previous_stable_scanlines} to {stable_scanlines}"
+                );
+                assert!(stable_bytes <= output.len(), "{name}: stable bytes exceed output");
+
+                if let Some(preview_scans) = decoder.decoded_scans() {
+                    assert_eq!(
+                        stable_bytes, 0,
+                        "{name}: progressive preview must not claim final stable bytes"
+                    );
+                    assert_eq!(
+                        stable_scanlines, 0,
+                        "{name}: progressive preview must not claim final stable scanlines"
+                    );
+                    assert!(
+                        preview_scans >= previous_preview_scans,
+                        "{name}: preview scan count regressed from {previous_preview_scans} to {preview_scans}"
+                    );
+                    let preview_bytes = decoder.decoded_preview_output_bytes().unwrap_or(0);
+                    let preview_scanlines = decoder.decoded_preview_scanlines().unwrap_or(0);
+                    assert!(preview_bytes == 0 || preview_bytes == output.len(), "{name}");
+                    assert!(
+                        preview_scanlines == 0
+                            || preview_scanlines == usize::from(decoder.info().unwrap().height),
+                        "{name}"
+                    );
+                    previous_preview_scans = preview_scans;
+                } else {
+                    assert_eq!(decoder.decoded_preview_output_bytes(), None, "{name}");
+                    assert_eq!(decoder.decoded_preview_scanlines(), None, "{name}");
+                }
+
+                previous_stable_bytes = stable_bytes;
+                previous_stable_scanlines = stable_scanlines;
+                assert!(available < data.len(), "{name}: scan stalled with full input");
+            }
+            Err(error) => panic!("{name}: unexpected scan error at {available}: {error:?}")
+        }
+    }
+}
+
+#[test]
+fn incremental_contract_corpus_matrix() {
+    let base = include_bytes!("../../../test-images/jpeg/tiny_non_interleaved_444.jpg");
+    let metadata_heavy = inject_header_segments(
+        base,
+        &[
+            app1_exif(b"incremental-contract-exif"),
+            app1_xmp(b"<xmp>incremental-contract</xmp>"),
+            app13_iptc(b"incremental-contract-iptc"),
+            app2_gain_map(b"\0\0\0\x01incremental-contract-gain-map"),
+            com_segment(b"incremental contract comment")
+        ]
+    );
+
+    for (name, data, step) in [
+        (
+            "baseline_interleaved",
+            include_bytes!("../../../test-images/jpeg/sampling_factors.jpg").as_slice(),
+            257
+        ),
+        ("baseline_multi_sos", base.as_slice(), 31),
+        (
+            "baseline_restart",
+            include_bytes!("../../../test-images/jpeg/four_components.jpg").as_slice(),
+            257
+        ),
+        (
+            "progressive_no_subsampling",
+            include_bytes!("../../../test-images/jpeg/down_sampled_grayscale_prog.jpg").as_slice(),
+            127
+        ),
+        (
+            "progressive_subsampling",
+            include_bytes!("../../../test-images/jpeg/rebuilt_relax_fill_bytes_before_marker.jpg")
+                .as_slice(),
+            257
+        ),
+        ("metadata_heavy", metadata_heavy.as_slice(), 29)
+    ] {
+        assert_incremental_contract(name, data, step);
+    }
+}
+
+#[test]
+#[cfg(feature = "arith")]
+fn arithmetic_incremental_contract_corpus_matrix() {
+    for (name, data) in [
+        (
+            "arithmetic_sequential",
+            include_bytes!("../../../test-images/jpeg/arith/seq.jpg").as_slice()
+        ),
+        (
+            "arithmetic_progressive",
+            include_bytes!("../../../test-images/jpeg/arith/prog.jpg").as_slice()
+        ),
+        (
+            "arithmetic_restart",
+            include_bytes!("../../../test-images/jpeg/arith/seq-restart.jpg").as_slice()
+        )
+    ] {
+        assert_incremental_contract(name, data, 127);
+    }
+}
+
 fn assert_decode_into_replay_matches_oneshot(name: &str, data: &[u8]) {
     let expected = decode_oneshot(data);
 
@@ -277,25 +435,56 @@ fn incomplete_data_returns_recoverable_eof() {
     assert!(!DecodeErrors::FormatStatic("bad").is_recoverable_eof());
 }
 
+#[test]
+fn malformed_input_error_classification_matrix() {
+    for (name, data) in [
+        ("truncated_soi", &[0xFF, 0xD8, 0xFF][..]),
+        (
+            "truncated_dqt_body",
+            &[0xFF, 0xD8, 0xFF, 0xDB, 0x00, 0x43, 0x00][..]
+        ),
+        (
+            "truncated_sos_body",
+            &[0xFF, 0xD8, 0xFF, 0xDA, 0x00, 0x08, 0x01, 0x00][..]
+        )
+    ] {
+        let error = JpegDecoder::new(ZCursor::new(data))
+            .decode()
+            .expect_err("incomplete input must not decode");
+        assert!(error.is_recoverable_eof(), "{name}: expected recoverable EOF, got {error:?}");
+    }
+
+    for (name, data) in [
+        ("bad_magic", &[0x00, 0x00][..]),
+        ("invalid_dht_length", &[0xFF, 0xD8, 0xFF, 0xC4, 0x00, 0x00][..]),
+        ("invalid_dqt_length", &[0xFF, 0xD8, 0xFF, 0xDB, 0x00, 0x01][..])
+    ] {
+        let error = JpegDecoder::new(ZCursor::new(data))
+            .decode()
+            .expect_err("malformed input must not decode");
+        assert!(!error.is_recoverable_eof(), "{name}: expected terminal error, got {error:?}");
+    }
+}
+
 /// Core resumable decoding test: decode_headers on truncated data returns
-/// a recoverable EOF, then a new decoder with the full data succeeds and
-/// produces byte-identical output to a one-shot decode.
+/// recoverable EOF, then the same decoder sees the full data and produces
+/// byte-identical output to a one-shot decode.
 #[test]
 fn resumable_decode_after_eof() {
     let data = include_bytes!("../../../test-images/jpeg/synthetic_image.jpg");
     let expected = decode_oneshot(data);
 
-    // Step 1: feed only a small prefix — not enough for headers.
-    let truncated = &data[..64];
-    let mut decoder = JpegDecoder::new(ZCursor::new(truncated));
+    let limit = Rc::new(Cell::new(64));
+    let cursor = GrowableCursor::new(data, Rc::clone(&limit));
+    let mut decoder = JpegDecoder::new(cursor);
     let err = decoder.decode_headers().unwrap_err();
     assert!(err.is_recoverable_eof(), "expected recoverable EOF on truncated data");
 
-    // Step 2: "fill the stream" — create a new decoder with the full data
-    // (ZCursor<&[u8]> is immutable, so we simulate refill by recreating).
-    let mut decoder = JpegDecoder::new(ZCursor::new(data));
-    let result = decoder.decode().unwrap();
-    assert_eq!(result, expected, "full decode after EOF must match one-shot");
+    limit.set(data.len());
+    decoder.decode_headers().expect("headers must resume with full input");
+    let mut output = vec![0; decoder.output_buffer_size().unwrap()];
+    decoder.decode_into(&mut output).expect("scan must decode with full input");
+    assert_eq!(output, expected, "resumed decode must match one-shot");
 }
 
 /// Calling decode_headers repeatedly on the same decoder with insufficient
@@ -1884,9 +2073,24 @@ fn header_marker_truncation_at_every_position_recovers() {
     // and inter-scan DHTs between SOS markers — i.e. it exercises both the
     // header-phase dispatch loop and the inter-scan marker path that
     // `mcu.rs::advance_to_next_sos` drives.
-    let data = include_bytes!("../../../test-images/jpeg/tiny_non_interleaved_444.jpg");
+    let base = include_bytes!("../../../test-images/jpeg/tiny_non_interleaved_444.jpg");
+    let data = inject_header_segments(base, &[com_segment(b"marker truncation coverage")]);
 
-    let markers = list_jpeg_markers(data);
+    let markers = list_jpeg_markers(&data);
+    for (code, name) in [
+        (0xE0, "APP"),
+        (0xFE, "COM"),
+        (0xDB, "DQT"),
+        (0xC4, "DHT"),
+        (0xC0, "SOF"),
+        (0xDA, "SOS"),
+        (0xD9, "EOI")
+    ] {
+        assert!(
+            markers.iter().any(|(_, marker, _)| *marker == code),
+            "fixture must contain {name}"
+        );
+    }
     let first_sos = markers
         .iter()
         .position(|(_, code, _)| *code == 0xDA)
@@ -1919,8 +2123,43 @@ fn header_marker_truncation_at_every_position_recovers() {
         let marker_end = offset + 2 + body_len;
         for cut in (offset + 2)..marker_end {
             let label = format!("marker FF{code:02X} at {offset}: truncated at byte {cut}");
-            assert_split_at_recovers(data, cut, &label);
+            assert_split_at_recovers(&data, cut, &label);
         }
+    }
+}
+
+#[test]
+fn restart_marker_boundaries_recover() {
+    let data = include_bytes!("../../../test-images/jpeg/four_components.jpg");
+    let markers = list_jpeg_markers(data);
+    let (dri_offset, _, dri_length) = markers
+        .iter()
+        .copied()
+        .find(|(_, code, _)| *code == 0xDD)
+        .expect("fixture must contain DRI");
+    let dri_length = dri_length.expect("DRI must have a length");
+
+    for cutoff in (dri_offset + 1)..(dri_offset + 2 + dri_length) {
+        assert_split_at_recovers(data, cutoff, &format!("DRI cutoff {cutoff}"));
+    }
+
+    let restart_offsets: Vec<_> = markers
+        .iter()
+        .filter_map(|(offset, code, _)| (0xD0..=0xD7).contains(code).then_some(*offset))
+        .collect();
+    assert!(restart_offsets.len() > 3, "fixture must contain restart markers");
+    for offset in restart_offsets.into_iter().take(4) {
+        for cutoff in [offset + 1, offset + 2, offset + 3] {
+            assert_split_at_recovers(data, cutoff, &format!("RST at {offset}, cutoff {cutoff}"));
+        }
+    }
+
+    let eoi_offset = markers
+        .iter()
+        .find_map(|(offset, code, _)| (*code == 0xD9).then_some(*offset))
+        .expect("fixture must contain EOI");
+    for cutoff in [eoi_offset + 1, eoi_offset + 2] {
+        assert_split_at_recovers(data, cutoff, &format!("EOI cutoff {cutoff}"));
     }
 }
 

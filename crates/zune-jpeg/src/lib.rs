@@ -153,6 +153,29 @@
 //! }
 //! ```
 //!
+//! ### Incremental support policy
+//!
+//! Baseline Huffman streams support row and restart checkpoints, including
+//! multi-SOS images. Progressive Huffman streams preserve completed previews and
+//! may resume first-DC scans from fine row checkpoints. Arithmetic JPEG support
+//! is available with the `arith` feature, but progressive arithmetic scans replay
+//! from their current scan boundary.
+//!
+//! Progressive AC, refinement, and arithmetic scans intentionally use
+//! scan-boundary replay because their coefficient updates cannot safely be
+//! applied twice. A repeated EOF after a first-DC fine resume also falls back to
+//! the scan boundary rather than retaining partially updated scratch data.
+//!
+//! `DecodeErrors::Cancelled` is distinct from recoverable EOF, but decoding may
+//! be retried after replacing or clearing the cancellation check. The same
+//! decoder and output allocation are still required.
+//!
+//! Incremental retry requires the same decoder, a seekable reader that retains
+//! all previously visible bytes, and the same output allocation. Preview pixels
+//! are replaceable and are never part of the stable-output contract. Downstream
+//! FFI bindings are outside this crate; adapters must preserve these lifetimes
+//! and retry semantics.
+//!
 //! ## Migrating from version 0.4--
 //!
 //! ### Motivation

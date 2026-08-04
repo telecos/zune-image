@@ -3,12 +3,11 @@
 //! Drives `JpegDecoder::decode_headers` and `decode_into` on the *same*
 //! decoder instance while feeding bytes through a `GrowableCursor` that
 //! exposes the input one chunk at a time. This exercises the resumable
-//! state machine introduced for fine-grained header resume:
+//! state machine across both headers and scan data:
 //!
-//!   * `DecodingState::DecodeHeaders { resume_position }` and the
-//!     marker-boundary checkpoints in `decode_headers_internal`.
-//!   * `DecodingState::DecodeScan { scan_start_position, .. }` and the
-//!     rollback-then-reseek path in `decode_into`.
+//!   * `header_resume_position` and the marker-boundary checkpoints in
+//!     `decode_headers_internal`.
+//!   * `ScanDecodeState` and the rollback-then-reseek path in `decode_into`.
 //!   * `HeaderAppendStateSnapshot` capture/rollback inside
 //!     `parse_marker_inner`, including the non-strict-mode inline-marker
 //!     dispatch from `mcu.rs::check_stream_marker_after_mcu_width`.
@@ -24,8 +23,8 @@ use std::io::{BufRead, Read, Seek, SeekFrom};
 use std::rc::Rc;
 
 use libfuzzer_sys::fuzz_target;
-use zune_jpeg::JpegDecoder;
 use zune_jpeg::zune_core::bytestream::ZCursor;
+use zune_jpeg::JpegDecoder;
 
 /// Cursor over a byte slice with an externally-controllable visibility
 /// limit. Reads/seeks past `limit` behave as EOF; growing `limit` simulates
@@ -38,7 +37,11 @@ struct GrowableCursor<'a> {
 
 impl<'a> GrowableCursor<'a> {
     fn new(data: &'a [u8], limit: Rc<Cell<usize>>) -> Self {
-        Self { data, position: 0, limit }
+        Self {
+            data,
+            position: 0,
+            limit
+        }
     }
 
     fn visible(&self) -> usize {
@@ -164,24 +167,107 @@ fuzz_target!(|data: &[u8]| {
         return; // headers never completed within iteration budget
     }
 
-    // Phase 2: Expose all remaining data and decode the scan in one shot.
-    // Scan-phase incremental resume is not yet implemented (the entropy
-    // decoder treats partial-scan EOF as end-of-scan and may panic on the
-    // resulting invalid state), so we only test that header-phase resume
-    // produces correct results by comparing against the one-shot path.
-    limit.set(payload.len());
+    // Phase 2: Keep growing the same reader while retrying scan decoding into
+    // the same output allocation. Incremental mode records checkpoints on the
+    // first scan attempt and preserves completed progressive previews.
+    decoder.set_incremental_mode(true);
+    let mut previous_stable_bytes = 0;
+    let mut previous_stable_scanlines = 0;
+    let mut previous_preview_scans = 0;
+    let mut scan_complete = false;
 
-    match decoder.decode_into(&mut out) {
-        Ok(()) => {}
-        Err(_) => return // scan error (recoverable or not), stop cleanly
+    for _ in 0..MAX_ITERATIONS {
+        match decoder.decode_into(&mut out) {
+            Ok(()) => {
+                scan_complete = true;
+                break;
+            }
+            Err(ref e) if e.is_recoverable_eof() => {
+                let stable_bytes = decoder.decoded_output_bytes().unwrap_or(0);
+                let stable_scanlines = decoder.decoded_scanlines().unwrap_or(0);
+                assert!(
+                    stable_bytes >= previous_stable_bytes,
+                    "stable bytes regressed from {} to {}",
+                    previous_stable_bytes,
+                    stable_bytes
+                );
+                assert!(
+                    stable_scanlines >= previous_stable_scanlines,
+                    "stable scanlines regressed from {} to {}",
+                    previous_stable_scanlines,
+                    stable_scanlines
+                );
+                assert!(
+                    stable_bytes <= out.len(),
+                    "stable bytes exceed the output allocation"
+                );
+
+                if let Some(preview_scans) = decoder.decoded_scans() {
+                    assert_eq!(stable_bytes, 0, "progressive preview claimed stable bytes");
+                    assert_eq!(
+                        stable_scanlines, 0,
+                        "progressive preview claimed stable rows"
+                    );
+                    assert!(
+                        preview_scans >= previous_preview_scans,
+                        "preview scans regressed from {} to {}",
+                        previous_preview_scans,
+                        preview_scans
+                    );
+                    let preview_bytes = decoder.decoded_preview_output_bytes().unwrap_or(0);
+                    let preview_scanlines = decoder.decoded_preview_scanlines().unwrap_or(0);
+                    // Completed progressive scans are exposed only as a full
+                    // provisional frame, never as a partial row prefix.
+                    assert!(
+                        preview_bytes == 0 || preview_bytes == out.len(),
+                        "preview bytes must be zero or a full frame"
+                    );
+                    assert!(
+                        preview_scanlines == 0
+                            || preview_scanlines == usize::from(decoder.info().unwrap().height),
+                        "preview scanlines must be zero or full height"
+                    );
+                    previous_preview_scans = preview_scans;
+                } else {
+                    assert_eq!(decoder.decoded_preview_output_bytes(), None);
+                    assert_eq!(decoder.decoded_preview_scanlines(), None);
+                }
+
+                previous_stable_bytes = stable_bytes;
+                previous_stable_scanlines = stable_scanlines;
+
+                let new_limit = limit.get().saturating_add(chunk).min(payload.len());
+                if new_limit == limit.get() {
+                    return;
+                }
+                limit.set(new_limit);
+            }
+            Err(_) => return
+        }
     }
 
+    if !scan_complete {
+        return;
+    }
+
+    assert_eq!(
+        decoder.decoded_output_bytes(),
+        Some(out.len()),
+        "success must stabilize all bytes"
+    );
+    assert_eq!(
+        decoder.decoded_scanlines(),
+        Some(usize::from(decoder.info().unwrap().height)),
+        "success must stabilize all scanlines"
+    );
+
     // Compare against ground truth: one-shot succeeded AND incremental
-    // finished with full data visibility for the scan.
+    // reached the same terminal output.
     if let Some(expected_pixels) = oneshot_pixels {
         if out.len() == expected_pixels.len() {
             assert_eq!(
-                out, expected_pixels,
+                out,
+                expected_pixels,
                 "incremental pixels diverge from one-shot decode \
                  (chunk={chunk}, len={})",
                 payload.len()
@@ -189,7 +275,8 @@ fuzz_target!(|data: &[u8]| {
 
             let got_icc = decoder.icc_profile();
             assert_eq!(
-                got_icc, oneshot_icc,
+                got_icc,
+                oneshot_icc,
                 "incremental ICC profile diverges from one-shot \
                  (chunk={chunk}, len={}); duplication or loss across \
                  scan retry",
