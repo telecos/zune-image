@@ -509,8 +509,8 @@ fn decode_with_repeated_growth(data: &[u8], limits: &[usize]) -> Vec<u8> {
 }
 
 /// Measures total wall-clock work across three EOF/retry cycles plus the final
-/// successful decode. Progressive refinement deliberately replays from the
-/// current scan boundary; the DC-first case can use fine row checkpoints.
+/// successful decode. Progressive Huffman scans resume from the latest
+/// completed MCU transaction for both first and refinement scans.
 fn decode_repeated_retry_cost(c: &mut Criterion) {
     let baseline = read(
         sample_path().join("test-images/jpeg/benchmarks/speed_bench_hv_subsampling.jpg")
@@ -545,10 +545,10 @@ fn decode_repeated_retry_cost(c: &mut Criterion) {
     group.bench_function("baseline row checkpoints", |b| {
         b.iter(|| black_box(decode_with_repeated_growth(&baseline, &baseline_limits)))
     });
-    group.bench_function("progressive first-DC fine checkpoints", |b| {
+    group.bench_function("progressive first-DC MCU checkpoints", |b| {
         b.iter(|| black_box(decode_with_repeated_growth(&progressive, &dc_limits)))
     });
-    group.bench_function("progressive refinement scan-boundary replay", |b| {
+    group.bench_function("progressive refinement MCU checkpoints", |b| {
         b.iter(|| black_box(decode_with_repeated_growth(&progressive, &refinement_limits)))
     });
 }

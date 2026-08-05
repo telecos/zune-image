@@ -109,11 +109,11 @@ pub(crate) struct ProgressiveScanCheckpoint {
     pub(crate) completed_scans: usize
 }
 
-/// Saved state inside a progressive scan when mid-scan resume is safe.
+/// Saved state at a completed progressive Huffman MCU boundary.
 ///
-/// This is only recorded for first DC scans. Those coefficients are assigned
-/// once, so keeping the active scan scratch buffer across EOF and resuming from
-/// a later MCU boundary cannot double-apply refinement data.
+/// Coefficient changes for the next MCU are committed transactionally, so the
+/// active scan scratch buffer can survive EOF across every progressive scan
+/// type without exposing or double-applying an incomplete MCU.
 #[derive(Clone)]
 pub(crate) struct ProgressiveFineCheckpoint {
     pub(crate) stream_position:  usize,
@@ -347,8 +347,8 @@ pub struct JpegDecoder<T> {
     /// Active progressive scan scratch buffers.
     ///
     /// Storage is retained across EOF or cancellation so retries can reuse its
-    /// capacity. Safe first-DC scans also keep its contents so a later retry can
-    /// resume from a fine checkpoint without committing partial scan data.
+    /// capacity. Huffman scans also keep completed MCU transactions so a later
+    /// retry can resume from a fine checkpoint without exposing partial data.
     pub(crate) progressive_scan_buffer: [Vec<i16>; MAX_COMPONENTS],
     /// Number of progressive scans committed into `progressive_mcus_buffer`.
     pub(crate) progressive_completed_scans: usize,
@@ -403,7 +403,7 @@ where
     // Mark the current stream position as a safe resume point at a marker
     // boundary; on a future retry decode_headers_internal will seek here
     // instead of restarting from SOI.
-    fn stream_position(&mut self) -> Result<usize, DecodeErrors> {
+    pub(crate) fn stream_position(&mut self) -> Result<usize, DecodeErrors> {
         let position = self.stream.position()?;
         usize::try_from(position).map_err(|_| {
             DecodeErrors::FormatStatic("Stream position does not fit in usize")
@@ -513,43 +513,53 @@ where
     }
 
     pub(crate) fn checkpoint_progressive_fine_scan(
-        &mut self, mcu_row: usize, mcu_col: usize, bitstream_state: BitstreamStateSnapshot
-    ) -> Result<(), DecodeErrors> {
-        let stream_position = self.stream_position()?;
-        let append_snapshot = HeaderAppendStateSnapshot::capture(self);
-        let sos_snapshot = self.capture_sos_params();
+        &mut self, stream_position: usize, mcu_row: usize, mcu_col: usize,
+        bitstream_state: BitstreamStateSnapshot
+    ) {
         let dc_predictions = core::array::from_fn(|idx| {
             self.components
                 .get(idx)
                 .map_or((0, 0), |component| (component.dc_pred, component.dc_diff))
         });
+        let needs_allocation = self
+            .scan_state
+            .as_deref()
+            .is_some_and(|state| state.progressive_fine_checkpoint.is_none());
+        let snapshots = needs_allocation.then(|| {
+            (
+                HeaderAppendStateSnapshot::capture(self),
+                self.capture_sos_params()
+            )
+        });
 
         if let Some(state) = self.scan_state.as_mut() {
-            state.progressive_fine_checkpoint = Some(Box::new(ProgressiveFineCheckpoint {
-                stream_position,
-                append_snapshot,
-                sos_snapshot,
-                completed_scans: self.progressive_completed_scans,
-                displayed_scans: self.progressive_displayed_scans,
-                mcu_row,
-                mcu_col,
-                todo: self.todo,
-                dc_predictions,
-                bitstream_state
-            }));
+            if let Some(checkpoint) = state.progressive_fine_checkpoint.as_deref_mut() {
+                checkpoint.stream_position = stream_position;
+                checkpoint.mcu_row = mcu_row;
+                checkpoint.mcu_col = mcu_col;
+                checkpoint.todo = self.todo;
+                checkpoint.dc_predictions = dc_predictions;
+                checkpoint.bitstream_state = bitstream_state;
+            } else if let Some((append_snapshot, sos_snapshot)) = snapshots {
+                state.progressive_fine_checkpoint = Some(Box::new(ProgressiveFineCheckpoint {
+                    stream_position,
+                    append_snapshot,
+                    sos_snapshot,
+                    completed_scans: self.progressive_completed_scans,
+                    displayed_scans: self.progressive_displayed_scans,
+                    mcu_row,
+                    mcu_col,
+                    todo: self.todo,
+                    dc_predictions,
+                    bitstream_state
+                }));
+            }
         }
-        Ok(())
     }
 
     pub(crate) fn invalidate_progressive_scan_checkpoint(&mut self) {
         if let Some(state) = self.scan_state.as_mut() {
             state.progressive_checkpoint = None;
-            state.progressive_fine_checkpoint = None;
-        }
-    }
-
-    pub(crate) fn invalidate_progressive_fine_checkpoint(&mut self) {
-        if let Some(state) = self.scan_state.as_mut() {
             state.progressive_fine_checkpoint = None;
         }
     }

@@ -151,8 +151,8 @@ The cases identify their expected work bound:
 | Case | Expected retry behavior |
 |:-----|:------------------------|
 | Baseline row checkpoints | Resume from the latest completed MCU row |
-| Progressive first-DC fine checkpoints | Resume from an eligible fine row checkpoint; a repeated fine-resume EOF may fall back to the scan boundary |
-| Progressive refinement scan-boundary replay | Intentionally replay the active refinement scan from its boundary |
+| Progressive first-DC MCU checkpoints | Resume from the latest completed Huffman MCU transaction |
+| Progressive refinement MCU checkpoints | Resume from the latest completed Huffman MCU transaction |
 
 Compare measurements only on the same machine and build. The benchmark measures
 total retry work rather than imposing a wall-clock threshold; correctness tests

@@ -329,8 +329,8 @@ fn progressive_edge_trigger_cancellation_is_reported() {
 fn progressive_cancellation_retry_matches_oneshot() {
     let expected = JpegDecoder::new(ZCursor::new(PROGRESSIVE)).decode().unwrap();
 
-    // Poll 8 cancels immediately after the first eligible eight-row fine
-    // checkpoint, proving its matching scratch coefficients survive retry.
+    // Poll cancellation after eight decoded rows, proving the latest MCU
+    // checkpoint and its matching scratch coefficients survive retry.
     for (incremental, cancel_poll) in [(false, 0), (true, 8)] {
         let mut decoder = JpegDecoder::new(ZCursor::new(PROGRESSIVE));
         decoder.decode_headers().unwrap();
@@ -409,7 +409,7 @@ fn progressive_inter_scan_marker_cancellation_retries() {
 }
 
 #[test]
-fn progressive_unsafe_scan_cancellation_retries() {
+fn progressive_ac_scan_cancellation_retries() {
     let expected = JpegDecoder::new(ZCursor::new(SMALL_PROGRESSIVE)).decode().unwrap();
     let mut decoder = JpegDecoder::new(ZCursor::new(SMALL_PROGRESSIVE));
     decoder.decode_headers().unwrap();
@@ -417,7 +417,7 @@ fn progressive_unsafe_scan_cancellation_retries() {
     decoder.set_incremental_mode(true);
     decoder.set_cancel_interval(1);
     // The first scan is followed by DHT and SOS marker polls; the next poll is
-    // the first row of the unsafe AC scan.
+    // the first row of the active AC scan.
     decoder.set_cancel(cancel_once_at(first_scan_rows + 2));
     let mut output = vec![0; decoder.output_buffer_size().unwrap()];
 
