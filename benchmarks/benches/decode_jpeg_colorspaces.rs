@@ -6,28 +6,37 @@ use zune_benches::sample_path;
 use zune_jpeg::zune_core::bytestream::ZCursor;
 use zune_jpeg::zune_core::colorspace::ColorSpace;
 use zune_jpeg::zune_core::options::DecoderOptions;
-use zune_jpeg::JpegDecoder;
+use zune_jpeg::{JpegDecoder, ScanlineReadStatus, ScanlineStatus};
 
 const REPETITIONS: usize = 7;
 const MODES: [(&str, ColorSpace); 4] = [
     ("RGB", ColorSpace::RGB),
     ("RGBA", ColorSpace::RGBA),
     ("BGR", ColorSpace::BGR),
-    ("BGRA", ColorSpace::BGRA),
+    ("BGRA", ColorSpace::BGRA)
 ];
 
-fn output_buffer(data: &[u8], colorspace: ColorSpace) -> Vec<u8> {
+fn decode_once(data: &[u8], colorspace: ColorSpace) -> Duration {
     let options = DecoderOptions::default().jpeg_set_out_colorspace(colorspace);
     let mut decoder = JpegDecoder::new_with_options(ZCursor::new(data), options);
-    decoder.decode_headers().unwrap();
-    vec![0; decoder.output_buffer_size().unwrap()]
-}
+    let mut scanlines = decoder.scanline_output();
+    assert_eq!(scanlines.start().unwrap(), ScanlineStatus::Ready);
+    let row_bytes = scanlines.output_row_bytes().unwrap();
+    let height = scanlines.output_height().unwrap();
+    let mut output = vec![0; row_bytes * height];
 
-fn decode_once(data: &[u8], colorspace: ColorSpace, output: &mut [u8]) -> Duration {
-    let options = DecoderOptions::default().jpeg_set_out_colorspace(colorspace);
-    let mut decoder = JpegDecoder::new_with_options(ZCursor::new(data), options);
     let start = Instant::now();
-    decoder.decode_into(output).unwrap();
+    while scanlines.output_scanline() < height {
+        let row = scanlines.output_scanline();
+        match scanlines
+            .read_scanlines(&mut output[row * row_bytes..], row_bytes)
+            .unwrap()
+        {
+            ScanlineReadStatus::RowsProcessed { rows } => assert!(rows > 0),
+            status => panic!("unexpected scanline status {status:?}")
+        }
+    }
+    assert_eq!(scanlines.finish().unwrap(), ScanlineStatus::Complete);
     let elapsed = start.elapsed();
     black_box(output);
     elapsed
@@ -36,8 +45,12 @@ fn decode_once(data: &[u8], colorspace: ColorSpace, output: &mut [u8]) -> Durati
 fn statistics(samples: &mut [Duration]) -> (f64, f64) {
     samples.sort_unstable();
     let median = samples[samples.len() / 2].as_secs_f64() * 1_000.0;
-    let mean =
-        samples.iter().map(Duration::as_secs_f64).sum::<f64>() / samples.len() as f64 * 1_000.0;
+    let mean = samples
+        .iter()
+        .map(Duration::as_secs_f64)
+        .sum::<f64>()
+        / samples.len() as f64
+        * 1_000.0;
     let variance = samples
         .iter()
         .map(|sample| {
@@ -50,11 +63,8 @@ fn statistics(samples: &mut [Duration]) -> (f64, f64) {
 }
 
 fn benchmark_image(name: &str, data: &[u8]) {
-    let mut outputs: [Vec<u8>; MODES.len()] =
-        core::array::from_fn(|index| output_buffer(data, MODES[index].1));
-
-    for (index, (_, colorspace)) in MODES.iter().enumerate() {
-        black_box(decode_once(data, *colorspace, &mut outputs[index]));
+    for (_, colorspace) in MODES {
+        black_box(decode_once(data, colorspace));
     }
 
     let mut samples: [Vec<Duration>; 4] = core::array::from_fn(|_| Vec::new());
@@ -65,7 +75,7 @@ fn benchmark_image(name: &str, data: &[u8]) {
             order.reverse();
         }
         for index in order {
-            samples[index].push(decode_once(data, MODES[index].1, &mut outputs[index]));
+            samples[index].push(decode_once(data, MODES[index].1));
         }
     }
 
