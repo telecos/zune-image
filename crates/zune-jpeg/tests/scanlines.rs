@@ -254,6 +254,46 @@ fn baseline_scanlines_match_supported_output_colorspaces() {
     }
 }
 
+fn decode_pixels(bytes: &[u8], colorspace: ColorSpace) -> Vec<u8> {
+    let options = DecoderOptions::default().jpeg_set_out_colorspace(colorspace);
+    JpegDecoder::new_with_options(ZCursor::new(bytes), options)
+        .decode()
+        .unwrap()
+}
+
+#[test]
+fn bgr_and_bgra_reverse_rgb_channels_for_full_and_scanline_output() {
+    for bytes in [
+        &include_bytes!("../../../test-images/jpeg/non_interleaved_444_64x64.jpg")[..],
+        &include_bytes!("../../../test-images/jpeg/non_interleaved_422_65x65.jpg")[..],
+        &include_bytes!("../../../test-images/jpeg/2029.jpg")[..],
+        &include_bytes!(
+            "../../../test-images/jpeg/rebuilt_relax_fill_bytes_before_marker.jpg"
+        )[..]
+    ] {
+        let rgb = decode_pixels(bytes, ColorSpace::RGB);
+        let bgr = decode_pixels(bytes, ColorSpace::BGR);
+        for (rgb, bgr) in rgb.chunks_exact(3).zip(bgr.chunks_exact(3)) {
+            assert_eq!(bgr, [rgb[2], rgb[1], rgb[0]]);
+        }
+
+        let rgba = decode_pixels(bytes, ColorSpace::RGBA);
+        let bgra = decode_pixels(bytes, ColorSpace::BGRA);
+        for (rgba, bgra) in rgba.chunks_exact(4).zip(bgra.chunks_exact(4)) {
+            assert_eq!(bgra, [rgba[2], rgba[1], rgba[0], 255]);
+        }
+
+        for colorspace in [
+            ColorSpace::RGB,
+            ColorSpace::RGBA,
+            ColorSpace::BGR,
+            ColorSpace::BGRA
+        ] {
+            assert_scanlines_match_decode(bytes, colorspace, 3);
+        }
+    }
+}
+
 #[test]
 fn batched_baseline_scanlines_match_decode() {
     assert_scanlines_match_decode(
