@@ -1,0 +1,13 @@
+path,size_bytes,sha256,width,height,components,sampling,progressive,source
+../../test-images/jpeg/benchmarks/speed_bench.jpg,1274218,d4e0232260c63ce9a3e7dadaa746ff3d2fc43d75848b5e71f2d5df7bfa43979b,7680,4320,3,1x1-1x1-1x1,false,repository
+../../test-images/jpeg/benchmarks/speed_bench_horizontal_subsampling.jpg,1123418,35d6df32a3dede0abb4fe58caaacf4e93e656061830184263da5691050679cb0,7680,4320,3,2x1-1x1-1x1,false,repository
+../../test-images/jpeg/benchmarks/speed_bench_vertical_subsampling.jpg,1117850,cd8a072d144acc120f107e0b9c97b9173a1e64a0482318c1630a861c011bb79c,7680,4320,3,1x2-1x1-1x1,false,repository
+../../test-images/jpeg/benchmarks/speed_bench_hv_subsampling.jpg,1024659,0e32b75da592d5bc94baefe38e5d6df7811959e42953cb2368bb44dd5f1e38f4,7680,4320,3,2x2-1x1-1x1,false,repository
+../../test-images/jpeg/benchmarks/speed_bench_prog.jpg,1387561,cc2fc5b6163d272c018c28349f96d1e56263af1027c81e09e4f4edfb381cb738,7680,4320,3,1x1-1x1-1x1,true,repository
+../../test-images/jpeg/benchmarks/speed_bench_prog_h_sampling.jpg,1212611,0920333bb59ec391661e84611f46d1fc90424e485a3740cf777c92014b390d36,7680,4320,3,2x1-1x1-1x1,true,repository
+../../test-images/jpeg/benchmarks/speed_bench_prog_v_sampling.jpg,1201714,d8daf5ce402312687cb84b08073afd2a2158a8c98e27f6c75f0d16ea39b001f1,7680,4320,3,1x2-1x1-1x1,true,repository
+../../test-images/jpeg/benchmarks/speed_bench_prog_hv_sampling.jpg,1201714,fb06cb96e9532ce15663bac50f6febd340451858a13fc1a9ffa27515876d6ae2,7680,4320,3,1x2-1x1-1x1,true,repository
+../../test-images/jpeg/progressive_restart_420.jpg,9326,f5ae8100566d0c52f8902fe538a4893363efcc990d999a909832479bc7e948b0,256,256,3,2x2-1x1-1x1,true,repository
+../../test-images/jpeg/four_components.jpg,142943,4f386cf88f69a33b25836b1052aad1582ac85335060c193c9eb6c3997939daa0,1318,611,4,fixture-defined,false,repository
+../../test-images/jpeg/baseline_non_interleaved.jpg,8622,f3a0bd25bf5a3b17511b2177890319a845ddecb990537c2f295956c5ba8d3dc3,640,640,3,multi-SOS,false,repository
+/tmp/zune-profile-baseline-gray-7680x4320.jpg,1127186,9a452938ce794ef0273d9ea4167e75d0428028c63b5d6b7f544fcc700ff21b5a,7680,4320,1,1x1,false,Pillow-10.2.0-from-speed_bench.png

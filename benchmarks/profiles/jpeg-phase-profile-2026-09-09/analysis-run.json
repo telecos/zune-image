@@ -1,0 +1,104 @@
+{
+  "groups": 152,
+  "phase_rows": 1110,
+  "scan_rows": 300,
+  "unstable_groups": 49,
+  "overhead": [
+    {
+      "variant": "zune-simd",
+      "enabled_median_ms": "77.630127",
+      "enabled_rsd_pct": "3.6829",
+      "disabled_median_ms": "72.877160",
+      "disabled_rsd_pct": "0.3602",
+      "geomean_overhead_pct": "7.2676"
+    },
+    {
+      "variant": "zune-scalar",
+      "enabled_median_ms": "77.972127",
+      "enabled_rsd_pct": "5.2913",
+      "disabled_median_ms": "72.984912",
+      "disabled_rsd_pct": "4.6106",
+      "geomean_overhead_pct": "6.9605"
+    }
+  ],
+  "correlations": {
+    "pixels": null,
+    "mcus": 0.2976800747926833,
+    "blocks": 0.2976800747926833,
+    "scan_count": 0.9787330167792244
+  },
+  "largest_ac_refine": [
+    {
+      "dataset": "main",
+      "workload": "progressive-420",
+      "fixture": "speed_bench_prog_hv_sampling.jpg",
+      "mode": "scanlines-bgra",
+      "variant": "zune-simd",
+      "scan_index": "9",
+      "kind": "AcRefine",
+      "component": "0",
+      "median_ms": "51.628382",
+      "rsd_pct": "0.5704"
+    },
+    {
+      "dataset": "main",
+      "workload": "progressive-444",
+      "fixture": "speed_bench_prog.jpg",
+      "mode": "scanlines-bgra",
+      "variant": "zune-scalar",
+      "scan_index": "9",
+      "kind": "AcRefine",
+      "component": "0",
+      "median_ms": "51.544649",
+      "rsd_pct": "0.4875"
+    },
+    {
+      "dataset": "main",
+      "workload": "progressive-422",
+      "fixture": "speed_bench_prog_h_sampling.jpg",
+      "mode": "scanlines-bgra",
+      "variant": "zune-simd",
+      "scan_index": "9",
+      "kind": "AcRefine",
+      "component": "0",
+      "median_ms": "51.538767",
+      "rsd_pct": "11.2836"
+    },
+    {
+      "dataset": "main",
+      "workload": "progressive-422",
+      "fixture": "speed_bench_prog_h_sampling.jpg",
+      "mode": "scanlines-bgra",
+      "variant": "zune-scalar",
+      "scan_index": "9",
+      "kind": "AcRefine",
+      "component": "0",
+      "median_ms": "51.522818",
+      "rsd_pct": "11.5219"
+    },
+    {
+      "dataset": "main",
+      "workload": "progressive-444",
+      "fixture": "speed_bench_prog.jpg",
+      "mode": "scanlines-bgra",
+      "variant": "zune-simd",
+      "scan_index": "9",
+      "kind": "AcRefine",
+      "component": "0",
+      "median_ms": "51.514312",
+      "rsd_pct": "0.4894"
+    },
+    {
+      "dataset": "main",
+      "workload": "progressive-422",
+      "fixture": "speed_bench_prog_h_sampling.jpg",
+      "mode": "raw",
+      "variant": "zune-scalar",
+      "scan_index": "9",
+      "kind": "AcRefine",
+      "component": "0",
+      "median_ms": "51.505045",
+      "rsd_pct": "0.8753"
+    }
+  ]
+}
