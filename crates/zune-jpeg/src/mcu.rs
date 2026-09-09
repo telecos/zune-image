@@ -247,7 +247,6 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                 .max()
                 .unwrap_or(0)
             * 8;
-        upsampler_scratch_space.clear();
         upsampler_scratch_space.resize(upsampler_scratch_size, 0);
 
         'sos: loop {
@@ -309,6 +308,7 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                 if self.mcu_checkpoints_enabled
                     && !self.is_progressive
                     && B::supports_mcu_checkpoint()
+                    && !(checkpoint.is_some() && i == scan_start_row)
                 {
                     let dc_predictions = core::array::from_fn(|idx| {
                         self.components
