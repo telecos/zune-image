@@ -1,0 +1,14 @@
+Benchmarking jpeg: HV sampling/mozjpeg
+Benchmarking jpeg: HV sampling/mozjpeg: Warming up for 1.0000 s
+
+Warning: Unable to complete 10 samples in 2.0s. You may wish to increase target time to 3.6s or enable flat sampling.
+Benchmarking jpeg: HV sampling/mozjpeg: Collecting 10 samples in estimated 3.5915 s (55 iterations)
+Benchmarking jpeg: HV sampling/mozjpeg: Analyzing
+jpeg: HV sampling/mozjpeg
+                        time:   [65.051 ms 65.868 ms 66.842 ms]
+                        thrpt:  [14.619 MiB/s 14.836 MiB/s 15.022 MiB/s]
+                 change:
+                        time:   [−1.7678% +0.3085% +2.1676%] (p = 0.79 > 0.05)
+                        thrpt:  [−2.1216% −0.3076% +1.7996%]
+                        No change in performance detected.
+

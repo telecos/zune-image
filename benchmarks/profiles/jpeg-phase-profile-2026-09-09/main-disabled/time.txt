@@ -1,0 +1,23 @@
+	Command being timed: "env ZUNE_PROFILE_DISABLED=1 ZUNE_PROFILE_OUT=/workspace/zune-image-profile/benchmarks/profiles/jpeg-phase-profile-2026-09-09/main-disabled ZUNE_PROFILE_REPETITIONS=7 ZUNE_PROFILE_ITERATIONS=3 target/release/deps/jpeg_phase_profile-ce686da140ec31f7"
+	User time (seconds): 182.73
+	System time (seconds): 13.06
+	Percent of CPU this job got: 99%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 3:15.85
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 395696
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 1614077
+	Voluntary context switches: 2
+	Involuntary context switches: 3314
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 456
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

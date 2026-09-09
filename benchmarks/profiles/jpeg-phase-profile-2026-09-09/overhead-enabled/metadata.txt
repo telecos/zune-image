@@ -1,0 +1,7 @@
+revision=aede1e43cdd650fc12540d6334197977e2401109
+profile_enabled=true
+repetitions=7
+iterations=5
+output_color=bgra
+fixture_root=/workspace/zune-image-profile/test-images/jpeg/benchmarks
+cwd=/workspace/zune-image-profile

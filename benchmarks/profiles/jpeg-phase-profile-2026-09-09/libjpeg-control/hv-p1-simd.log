@@ -1,0 +1,15 @@
+Benchmarking jpeg: HV sampling/mozjpeg
+Benchmarking jpeg: HV sampling/mozjpeg: Warming up for 1.0000 s
+Benchmarking jpeg: HV sampling/mozjpeg: Collecting 10 samples in estimated 2.3240 s (30 iterations)
+Benchmarking jpeg: HV sampling/mozjpeg: Analyzing
+jpeg: HV sampling/mozjpeg
+                        time:   [64.420 ms 64.577 ms 64.772 ms]
+                        thrpt:  [15.087 MiB/s 15.132 MiB/s 15.169 MiB/s]
+                 change:
+                        time:   [−3.7375% −1.6088% −0.1631%] (p = 0.12 > 0.05)
+                        thrpt:  [+0.1634% +1.6351% +3.8826%]
+                        No change in performance detected.
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) high mild
+  1 (10.00%) high severe
+

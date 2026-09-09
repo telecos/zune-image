@@ -1,0 +1,16 @@
+Benchmarking jpeg: Progressive HV sampling/mozjpeg
+Benchmarking jpeg: Progressive HV sampling/mozjpeg: Warming up for 1.0000 s
+
+Warning: Unable to complete 10 samples in 2.0s. You may wish to increase target time to 2.4s.
+Benchmarking jpeg: Progressive HV sampling/mozjpeg: Collecting 10 samples in estimated 2.4222 s (10 iterations)
+Benchmarking jpeg: Progressive HV sampling/mozjpeg: Analyzing
+jpeg: Progressive HV sampling/mozjpeg
+                        time:   [242.85 ms 244.00 ms 245.89 ms]
+                        thrpt:  [4.6607 MiB/s 4.6969 MiB/s 4.7191 MiB/s]
+                 change:
+                        time:   [+0.4160% +1.0020% +1.8264%] (p = 0.01 < 0.05)
+                        thrpt:  [−1.7937% −0.9920% −0.4143%]
+                        Change within noise threshold.
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+

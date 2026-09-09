@@ -1,0 +1,3 @@
+variant,enabled_median_ms,enabled_rsd_pct,disabled_median_ms,disabled_rsd_pct,geomean_overhead_pct
+zune-simd,77.630127,3.6829,72.877160,0.3602,7.2676
+zune-scalar,77.972127,5.2913,72.984912,4.6106,6.9605
