@@ -242,6 +242,12 @@ pub(crate) trait BitStream {
 
     /// Restore from a type-erased snapshot. Panics if variant doesn't match.
     fn restore_snapshot(&mut self, snapshot: BitstreamStateSnapshot);
+
+    #[cfg(feature = "profile-active")]
+    fn set_profile_dequant_sample(&mut self, enabled: bool);
+
+    #[cfg(feature = "profile-active")]
+    fn take_dequant_profile(&mut self) -> (u64, u64);
 }
 
 /// A `BitStream` struct, a bit by bit reader with super powers
@@ -268,6 +274,12 @@ pub(crate) struct BitStreamHuffman {
     /// True if we have seen end of image marker.
     /// Don't read anything after that.
     seen_eoi:            bool,
+    #[cfg(feature = "profile-active")]
+    profile_dequant_sample: bool,
+    #[cfg(feature = "profile-active")]
+    profile_dequant_ticks: u64,
+    #[cfg(feature = "profile-active")]
+    profile_dequant_samples: u64,
 }
 
 impl BitStreamHuffman {
@@ -308,7 +320,6 @@ impl BitStreamHuffman {
         bits
     }
 
-
     /// Decode the DC coefficient in a MCU block.
     ///
     /// The decoded coefficient is written to `dc_prediction`
@@ -323,7 +334,7 @@ impl BitStreamHuffman {
         &mut self, reader: &mut ZReader<T>, dc_table: &HuffmanTable, dc_prediction: &mut i32
     ) -> Result<bool, DecodeErrors>
     where
-    T: ZByteReaderTrait
+        T: ZByteReaderTrait
     {
         let (mut symbol, r);
 
@@ -352,7 +363,7 @@ impl BitStreamHuffman {
         &mut self, reader: &mut ZReader<T>, dc_table: &HuffmanTable
     ) -> Result<bool, DecodeErrors>
     where
-    T: ZByteReaderTrait
+        T: ZByteReaderTrait
     {
         let mut symbol;
 
@@ -470,6 +481,12 @@ impl BitStream for BitStreamHuffman {
             eob_run:             0,
             overread_by:         0,
             seen_eoi:            false,
+            #[cfg(feature = "profile-active")]
+            profile_dequant_sample: false,
+            #[cfg(feature = "profile-active")]
+            profile_dequant_ticks: 0,
+            #[cfg(feature = "profile-active")]
+            profile_dequant_samples: 0,
         }
     }
 
@@ -489,6 +506,12 @@ impl BitStream for BitStreamHuffman {
             eob_run:             0,
             overread_by:         0,
             seen_eoi:            false,
+            #[cfg(feature = "profile-active")]
+            profile_dequant_sample: false,
+            #[cfg(feature = "profile-active")]
+            profile_dequant_ticks: 0,
+            #[cfg(feature = "profile-active")]
+            profile_dequant_samples: 0,
         }
     }
 
@@ -553,8 +576,21 @@ impl BitStream for BitStreamHuffman {
             BitstreamStateSnapshot::Huffman(s) => self.restore_state(s),
             BitstreamStateSnapshot::None => {}
             #[cfg(feature = "arith")]
-            _ => unreachable!("Huffman stream given arithmetic snapshot"),
+            _ => unreachable!("Huffman stream given arithmetic snapshot")
         }
+    }
+
+    #[cfg(feature = "profile-active")]
+    fn set_profile_dequant_sample(&mut self, enabled: bool) {
+        self.profile_dequant_sample = enabled;
+    }
+
+    #[cfg(feature = "profile-active")]
+    fn take_dequant_profile(&mut self) -> (u64, u64) {
+        let profile = (self.profile_dequant_ticks, self.profile_dequant_samples);
+        self.profile_dequant_ticks = 0;
+        self.profile_dequant_samples = 0;
+        profile
     }
 
     /// Refill the bit buffer by (a maximum of) 32 bits
@@ -608,8 +644,10 @@ impl BitStream for BitStreamHuffman {
                             let marker = Marker::from_u8(next_byte as u8);
                             self.marker = marker;
 
-                            if let Some(Marker::UNKNOWN(_)) = marker{
-                                return Err(DecodeErrors::Format("Unknown marker in bit stream".to_string()));
+                            if let Some(Marker::UNKNOWN(_)) = marker {
+                                return Err(DecodeErrors::Format(
+                                    "Unknown marker in bit stream".to_string()
+                                ));
                             }
                             if next_byte == 0xD9 {
                                 // special handling for eoi, fill some bytes,even if its zero,
@@ -716,7 +754,7 @@ impl BitStream for BitStreamHuffman {
         let (mut symbol, mut r, mut fast_ac);
         // Decode AC coefficients
         let mut pos: usize = 1;
-        if  self.bits_left < 1 && self.marker.is_some() {
+        if self.bits_left < 1 && self.marker.is_some() {
             return Err(DecodeErrors::Format(
                 "No more bytes left in stream before marker".to_string()
             ));
@@ -725,7 +763,16 @@ impl BitStream for BitStreamHuffman {
         self.decode_dc(reader, dc_table, dc_prediction)?;
 
         // set dc to be the dc prediction.
+        #[cfg(feature = "profile-active")]
+        let profile_sample = self.profile_dequant_sample;
+        #[cfg(feature = "profile-active")]
+        let profile_dequant_start = profile_sample.then(crate::profile::tick);
         block[0] = dc_prediction.wrapping_mul(qt_table[0]);
+        #[cfg(feature = "profile-active")]
+        if let Some(started) = profile_dequant_start {
+            self.profile_dequant_ticks += crate::profile::elapsed_ticks(started);
+            self.profile_dequant_samples += 1;
+        }
 
         while pos < 64 {
             self.refill(reader)?;
@@ -738,7 +785,14 @@ impl BitStream for BitStreamHuffman {
                 pos += ((fast_ac >> 4) & 15) as usize; // run
                 let t_pos = UN_ZIGZAG[min(pos, 63)] & 63;
 
-                block[t_pos] = i32::from(fast_ac >> 8).wrapping_mul (qt_table[t_pos]); // Value
+                #[cfg(feature = "profile-active")]
+                let profile_dequant_start = profile_sample.then(crate::profile::tick);
+                block[t_pos] = i32::from(fast_ac >> 8).wrapping_mul(qt_table[t_pos]); // Value
+                #[cfg(feature = "profile-active")]
+                if let Some(started) = profile_dequant_start {
+                    self.profile_dequant_ticks += crate::profile::elapsed_ticks(started);
+                    self.profile_dequant_samples += 1;
+                }
                 self.drop_bits((fast_ac & 15) as u8);
                 pos += 1;
             } else {
@@ -753,7 +807,14 @@ impl BitStream for BitStreamHuffman {
                     symbol = huff_extend(r, symbol);
                     let t_pos = UN_ZIGZAG[pos & 63] & 63;
 
-                    block[t_pos] = symbol .wrapping_mul( qt_table[t_pos]);
+                    #[cfg(feature = "profile-active")]
+                    let profile_dequant_start = profile_sample.then(crate::profile::tick);
+                    block[t_pos] = symbol.wrapping_mul(qt_table[t_pos]);
+                    #[cfg(feature = "profile-active")]
+                    if let Some(started) = profile_dequant_start {
+                        self.profile_dequant_ticks += crate::profile::elapsed_ticks(started);
+                        self.profile_dequant_samples += 1;
+                    }
 
                     pos += 1;
                 } else if r != 15 {

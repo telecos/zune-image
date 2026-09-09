@@ -74,7 +74,7 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
         let result = self.decode_mcu_ycbcr_baseline_inner::<B>(
             output,
             &mut progressive_mcus,
-            &mut upsampler_scratch,
+            &mut upsampler_scratch
         );
         self.progressive_mcus_buffer = progressive_mcus;
         self.upsampler_scratch = upsampler_scratch;
@@ -98,9 +98,24 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
     #[inline(never)]
     fn decode_mcu_ycbcr_baseline_inner<B: BitStream>(
         &mut self, output: &mut McuDecodeOutput<'_, '_>,
-        progressive_mcus: &mut [Vec<i16>; MAX_COMPONENTS], upsampler_scratch_space: &mut Vec<i16>,
+        progressive_mcus: &mut [Vec<i16>; MAX_COMPONENTS], upsampler_scratch_space: &mut Vec<i16>
     ) -> Result<(), DecodeErrors> {
         setup_component_params(self)?;
+
+        #[cfg(feature = "profile-active")]
+        if self.profile.enabled {
+            self.profile.width = self.info.width;
+            self.profile.height = self.info.height;
+            self.profile.components = self.components.len() as u8;
+            self.profile.mcu_rows = self.mcu_y as u64;
+            self.profile.mcus = (self.mcu_x * self.mcu_y) as u64;
+            for (index, component) in self.components.iter().enumerate().take(MAX_COMPONENTS) {
+                self.profile.sampling[index] = (
+                    component.horizontal_sample as u8,
+                    component.vertical_sample as u8
+                );
+            }
+        }
 
         let (mut mcu_width, mut mcu_height);
 
@@ -184,6 +199,11 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
 
                 comp.needed = true;
                 if !resuming || comp.raw_coeff.len() != len {
+                    #[cfg(feature = "profile-active")]
+                    if self.profile.enabled && comp.raw_coeff.capacity() < len {
+                        self.profile.capacity_growths += 1;
+                        self.profile.progressive_init_bytes += (len * 2) as u64;
+                    }
                     // Reuse capacity across decodes; zero contents.
                     comp.raw_coeff.clear();
                     comp.raw_coeff.resize(len, 0);
@@ -225,6 +245,10 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
         let mut pixels_written = 0;
 
         if let Some(checkpoint) = checkpoint {
+            #[cfg(feature = "profile-active")]
+            if self.profile.enabled {
+                self.profile.checkpoint_restores += 1;
+            }
             resume_row = checkpoint.mcu_row;
             resume_col = checkpoint.mcu_col;
             pixels_written = checkpoint.pixels_written;
@@ -247,7 +271,15 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                 .max()
                 .unwrap_or(0)
             * 8;
+        #[cfg(feature = "profile-active")]
+        if self.profile.enabled && upsampler_scratch_space.capacity() < upsampler_scratch_size {
+            self.profile.capacity_growths += 1;
+        }
         upsampler_scratch_space.resize(upsampler_scratch_size, 0);
+        #[cfg(feature = "profile-active")]
+        if self.profile.enabled {
+            self.profile.upsample_scratch_bytes += (upsampler_scratch_size * 2) as u64;
+        }
 
         'sos: loop {
             let scan_mcu_height = if all_components_in_first_scan {
@@ -276,6 +308,10 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
             let mut cancel = self.cancel_debounced(mcu_width);
             for i in scan_start_row..scan_mcu_height {
                 let start_col = if i == scan_start_row { scan_start_col } else { 0 };
+                #[cfg(feature = "profile-active")]
+                if self.profile.enabled {
+                    self.profile.cancellation_polls += 1;
+                }
                 if cancel.is_cancelled() {
                     return Err(DecodeErrors::Cancelled);
                 }
@@ -284,8 +320,9 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                         return Err(DecodeErrors::ExhaustedData);
                     }
                     if all_components_in_first_scan {
-                        if let Some(remaining) =
-                            output.pixels_mut().and_then(|pixels| pixels.get_mut(pixels_written..))
+                        if let Some(remaining) = output
+                            .pixels_mut()
+                            .and_then(|pixels| pixels.get_mut(pixels_written..))
                         {
                             remaining.fill(128);
                         }
@@ -327,9 +364,15 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
 
                 // decode a whole MCU width,
                 // this takes into account interleaved components.
+                #[cfg(feature = "profile-active")]
+                if self.profile.enabled {
+                    self.profile.cancellation_polls += 1;
+                }
                 if cancel.is_cancelled() {
                     return Err(DecodeErrors::Cancelled);
                 }
+                #[cfg(feature = "profile-active")]
+                let profile_mcu_start = self.profile.enabled.then(crate::profile::tick);
                 let terminate_result = {
                     let mut mcu_width_context = McuWidthContext {
                         mcu_width,
@@ -338,31 +381,49 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                         pixels_written,
                         tmp: &mut tmp,
                         stream: &mut stream,
-                        progressive: &mut *progressive_mcus,
+                        progressive: &mut *progressive_mcus
                     };
                     if all_components_in_first_scan {
+                        #[cfg(feature = "profile-active")]
+                        if self.profile.enabled {
+                            self.decode_mcu_width::<false, true, B>(&mut mcu_width_context)
+                        } else {
+                            self.decode_mcu_width::<false, false, B>(&mut mcu_width_context)
+                        }
+                        #[cfg(not(feature = "profile-active"))]
                         self.decode_mcu_width::<false, B>(&mut mcu_width_context)
                     } else {
-                    /* NB: (cae). This code was added due to the issue at https://github.com/etemesi254/zune-image/issues/277
-                    *
-                    * There is a particular set of images that interleave the start of scan (SOS) with the MCU,
-                    * E.g if it's a three component image, we have SOS->MCU ->SOS->MCU ->SOS->MCU
-                    * which presents a problem on decoding, we need to buffer the whole image before continuing since
-                    * we won't have a row containing all the component data which will be needed e.g for color conversion.
-                    *
-                    * The mechanisms is that we decode the whole image upfront, which goes against the normal
-                    * routine of decoding MCU width , so this requires more memory upfront than initial routines
-                    * but it is a single image out of the many corpuses that exist, so its fine.
-                    * (image in test-images/jpeg/sos_news.jpeg)
+                        /* NB: (cae). This code was added due to the issue at https://github.com/etemesi254/zune-image/issues/277
+                        *
+                        * There is a particular set of images that interleave the start of scan (SOS) with the MCU,
+                        * E.g if it's a three component image, we have SOS->MCU ->SOS->MCU ->SOS->MCU
+                        * which presents a problem on decoding, we need to buffer the whole image before continuing since
+                        * we won't have a row containing all the component data which will be needed e.g for color conversion.
+                        *
+                        * The mechanisms is that we decode the whole image upfront, which goes against the normal
+                        * routine of decoding MCU width , so this requires more memory upfront than initial routines
+                        * but it is a single image out of the many corpuses that exist, so its fine.
+                        * (image in test-images/jpeg/sos_news.jpeg)
 
-                    * Code contributed by  Aurelia Molzer (https://github.com/197g)
+                        * Code contributed by  Aurelia Molzer (https://github.com/197g)
 
-                    *
-                    */
+                        *
+                        */
 
+                        #[cfg(feature = "profile-active")]
+                        if self.profile.enabled {
+                            self.decode_mcu_width::<true, true, B>(&mut mcu_width_context)
+                        } else {
+                            self.decode_mcu_width::<true, false, B>(&mut mcu_width_context)
+                        }
+                        #[cfg(not(feature = "profile-active"))]
                         self.decode_mcu_width::<true, B>(&mut mcu_width_context)
                     }
                 };
+                #[cfg(feature = "profile-active")]
+                if let Some(started) = profile_mcu_start {
+                    self.profile.baseline_mcu_ticks += crate::profile::elapsed_ticks(started);
+                }
 
                 let terminate = match terminate_result {
                     Ok(terminate) => terminate,
@@ -381,7 +442,7 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                                         width,
                                         padded_width,
                                         &mut pixels_written,
-                                        upsampler_scratch_space,
+                                        upsampler_scratch_space
                                     )?;
                                     self.pixels_decoded = pixels_written;
                                     if let Some(remaining) = pixels.get_mut(pixels_written..) {
@@ -391,7 +452,7 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                                 McuDecodeOutput::RawPlanes(raw_planes) => {
                                     self.copy_raw_planes_for_mcu_stripe(i, raw_planes)?;
                                 }
-                                McuDecodeOutput::Scanlines(_) => return Err(e),
+                                McuDecodeOutput::Scanlines(_) => return Err(e)
                             }
                         } else if let Some(pixels) = output.pixels_mut() {
                             pixels.fill(128);
@@ -444,7 +505,7 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                                 width,
                                 padded_width,
                                 &mut pixels_written,
-                                upsampler_scratch_space,
+                                upsampler_scratch_space
                             )?;
                             self.pixels_decoded = pixels_written;
                         }
@@ -466,7 +527,7 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                                 width,
                                 padded_width,
                                 &mut stripe_written,
-                                upsampler_scratch_space,
+                                upsampler_scratch_space
                             )?;
                             scanlines.rows_written = stripe_written / scanlines.stride;
                         }
@@ -754,7 +815,11 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
         result
     }
 
-    fn decode_mcu_width<const PROGRESSIVE: bool, B: BitStream>(
+    fn decode_mcu_width<
+        const PROGRESSIVE: bool,
+        #[cfg(feature = "profile-active")] const PROFILE: bool,
+        B: BitStream
+    >(
         &mut self, context: &mut McuWidthContext<'_, B>
     ) -> Result<McuContinuation, DecodeErrors> {
         let is_one_by_one = !self.scan_subsampled;
@@ -769,9 +834,23 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
         // We statically specialize on this to improve code generation of the common case a little
         // bit. We could also special case common sub-sampling cases but be mindful of code bloat.
         if is_one_by_one {
-            self.inner_decode_mcu_width::<PROGRESSIVE, false, B>(context)
+            #[cfg(feature = "profile-active")]
+            {
+                self.inner_decode_mcu_width::<PROGRESSIVE, false, PROFILE, B>(context)
+            }
+            #[cfg(not(feature = "profile-active"))]
+            {
+                self.inner_decode_mcu_width::<PROGRESSIVE, false, B>(context)
+            }
         } else {
-            self.inner_decode_mcu_width::<PROGRESSIVE, true, B>(context)
+            #[cfg(feature = "profile-active")]
+            {
+                self.inner_decode_mcu_width::<PROGRESSIVE, true, PROFILE, B>(context)
+            }
+            #[cfg(not(feature = "profile-active"))]
+            {
+                self.inner_decode_mcu_width::<PROGRESSIVE, true, B>(context)
+            }
         }
     }
 
@@ -781,7 +860,12 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
     // when `not SAMPLED` then the inner loop has exactly one iteration per component in
     // the scan. The difference was ~1% or a bit more.
     #[allow(clippy::too_many_lines)]
-    fn inner_decode_mcu_width<const PROGRESSIVE: bool, const SAMPLED: bool, B: BitStream>(
+    fn inner_decode_mcu_width<
+        const PROGRESSIVE: bool,
+        const SAMPLED: bool,
+        #[cfg(feature = "profile-active")] const PROFILE: bool,
+        B: BitStream
+    >(
         &mut self, context: &mut McuWidthContext<'_, B>
     ) -> Result<McuContinuation, DecodeErrors> {
         // Destructure the context into local bindings up front. Reading the
@@ -799,6 +883,17 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
 
         let z_order = self.z_order;
         let z_scans = &z_order[..usize::from(self.num_scans)];
+
+        #[cfg(feature = "profile-active")]
+        let profile_call_base = self.profile.idct_pointer_calls;
+        #[cfg(feature = "profile-active")]
+        let mut profile_block_calls = 0_u64;
+        #[cfg(feature = "profile-active")]
+        let mut profile_blocks_by_component = [0_u64; MAX_COMPONENTS];
+        #[cfg(feature = "profile-active")]
+        let mut profile_idct_calls = [0_u64; 3];
+        #[cfg(feature = "profile-active")]
+        let mut profile_coefficient_extent = [0_u64; 65];
 
         // How much of the head of `tmp` was written by the last MCU decoding? We only check for
         // two different cases and not all possible outcomes as this is only used to optimize the
@@ -879,6 +974,14 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                         if SAMPLED && !PROGRESSIVE { 0..component.horizontal_sample } else { 0..1 };
 
                     for h_samp in h_step {
+                        #[cfg(feature = "profile-active")]
+                        let profile_call_index = profile_call_base + profile_block_calls;
+                        #[cfg(feature = "profile-active")]
+                        let profile_sample_kind = if PROFILE && component_samples_needed {
+                            crate::profile::DecodeProfile::sample_kind(profile_call_index)
+                        } else {
+                            0
+                        };
                         let result = if component_samples_needed {
                             // Fill the array with zeroes, decode_mcu_block expects
                             // a zero based array. Clobber is in zig-zag order though.
@@ -892,7 +995,17 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
 
                             tmp[..clobber_len].fill(0);
 
-                            stream.decode_mcu_block(
+                            #[cfg(feature = "profile-active")]
+                            let profile_entropy_start = if profile_sample_kind == 1 {
+                                Some(crate::profile::tick())
+                            } else {
+                                None
+                            };
+                            #[cfg(feature = "profile-active")]
+                            let profile_dequant_due = profile_sample_kind == 2;
+                            #[cfg(feature = "profile-active")]
+                            stream.set_profile_dequant_sample(profile_dequant_due);
+                            let result = stream.decode_mcu_block(
                                 &mut self.stream,
                                 dc_table,
                                 ac_table,
@@ -900,7 +1013,31 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                                 tmp,
                                 &mut component.dc_pred,
                                 &mut component.dc_diff
-                            )
+                            );
+                            #[cfg(feature = "profile-active")]
+                            let (profile_dequant_ticks, profile_dequant_samples) =
+                                if profile_dequant_due {
+                                    stream.take_dequant_profile()
+                                } else {
+                                    (0, 0)
+                                };
+                            #[cfg(feature = "profile-active")]
+                            if let Some(started) = profile_entropy_start {
+                                self.profile.entropy_samples += 1;
+                                self.profile.entropy_ticks += self.profile.sampled_ticks(started);
+                                self.profile.sampled_nonzero_coefficients +=
+                                    tmp.iter().filter(|coefficient| **coefficient != 0).count()
+                                        as u64;
+                            }
+                            #[cfg(feature = "profile-active")]
+                            if PROFILE {
+                                self.profile.dequant_samples += profile_dequant_samples;
+                                self.profile.dequant_ticks += profile_dequant_ticks.saturating_sub(
+                                    profile_dequant_samples
+                                        .saturating_mul(self.profile.timer_overhead_ticks)
+                                );
+                            }
+                            result
                         } else {
                             // We do not touch tmp so there is no need to reset it.
                             stream.discard_mcu_block(
@@ -954,6 +1091,13 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
 
                             let idct_pos = channel.get_mut(idct_position..).unwrap();
 
+                            #[cfg(feature = "profile-active")]
+                            let profile_idct_start = if profile_sample_kind == 1 {
+                                Some(crate::profile::tick())
+                            } else {
+                                None
+                            };
+
                             if len <= 1 {
                                 (self.idct_1x1_func)(tmp, idct_pos, component.width_stride);
                             } else if len <= 10 {
@@ -961,6 +1105,34 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                             } else {
                                 //  call idct.
                                 (self.idct_func)(tmp, idct_pos, component.width_stride);
+                            }
+                            #[cfg(feature = "profile-active")]
+                            if PROFILE {
+                                let component_index = k.min(MAX_COMPONENTS - 1);
+                                profile_blocks_by_component[component_index] += 1;
+                                profile_block_calls += 1;
+                                profile_coefficient_extent[usize::from(len.min(64))] += 1;
+                                let sampled_ticks = profile_idct_start
+                                    .map_or(0, |started| self.profile.sampled_ticks(started));
+                                if len <= 1 {
+                                    profile_idct_calls[0] += 1;
+                                    if sampled_ticks != 0 {
+                                        self.profile.idct_1x1_samples += 1;
+                                        self.profile.idct_1x1_ticks += sampled_ticks;
+                                    }
+                                } else if len <= 10 {
+                                    profile_idct_calls[1] += 1;
+                                    if sampled_ticks != 0 {
+                                        self.profile.idct_4x4_samples += 1;
+                                        self.profile.idct_4x4_ticks += sampled_ticks;
+                                    }
+                                } else {
+                                    profile_idct_calls[2] += 1;
+                                    if sampled_ticks != 0 {
+                                        self.profile.idct_8x8_samples += 1;
+                                        self.profile.idct_8x8_ticks += sampled_ticks;
+                                    }
+                                }
                             }
                         }
                     }
@@ -989,6 +1161,26 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
             if stream.marker().is_some() && stream.bits_left() == 0 {
                 break;
             }
+        }
+
+        #[cfg(feature = "profile-active")]
+        if PROFILE {
+            for (total, count) in self
+                .profile
+                .blocks_by_component
+                .iter_mut()
+                .zip(profile_blocks_by_component)
+            {
+                *total += count;
+            }
+            for (index, count) in profile_coefficient_extent.iter().enumerate() {
+                self.profile.coefficient_extent[index] += count;
+            }
+            self.profile.idct_1x1_calls += profile_idct_calls[0];
+            self.profile.idct_4x4_calls += profile_idct_calls[1];
+            self.profile.idct_8x8_calls += profile_idct_calls[2];
+            self.profile.idct_pointer_calls += profile_block_calls;
+            self.profile.raw_coeff_bytes += profile_block_calls * 128;
         }
 
         self.check_stream_marker_after_mcu_width(stream)
@@ -1184,15 +1376,15 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                     }
                     // Non-strict: skip unknown marker
                     warn!("Skipping unexpected marker {other:?} between scans");
-                    let length = restore_inter_scan_on_suspend!(
-                        self.stream.get_u16_be_err().map_err(DecodeErrors::IoErrors)
-                    );
+                    let length = restore_inter_scan_on_suspend!(self
+                        .stream
+                        .get_u16_be_err()
+                        .map_err(DecodeErrors::IoErrors));
                     if length >= 2 {
-                        restore_inter_scan_on_suspend!(
-                            self.stream
-                                .skip((length - 2) as usize)
-                                .map_err(DecodeErrors::IoErrors)
-                        );
+                        restore_inter_scan_on_suspend!(self
+                            .stream
+                            .skip((length - 2) as usize)
+                            .map_err(DecodeErrors::IoErrors));
                     }
                 }
             }
@@ -1253,6 +1445,8 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
         width: usize, padded_width: usize, pixels_written: &mut usize,
         upsampler_scratch_space: &mut [i16]
     ) -> Result<(), DecodeErrors> {
+        #[cfg(feature = "profile-active")]
+        let profile_post_start = self.profile.enabled.then(crate::profile::tick);
         let out_colorspace_components = self.options.jpeg_get_out_colorspace().num_components();
         let row_bytes = width
             .checked_mul(out_colorspace_components)
@@ -1264,6 +1458,10 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
         }
 
         let mut px = *pixels_written;
+        #[cfg(feature = "profile-active")]
+        let mut profile_color_nanos = 0_u64;
+        #[cfg(feature = "profile-active")]
+        let mut profile_color_calls = 0_u64;
         // indicates whether image is vertically up-sampled
         let is_vertically_sampled = self
             .components
@@ -1297,6 +1495,8 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                         }
                         *samp = temp.unwrap();
                     }
+                    #[cfg(feature = "profile-active")]
+                    let profile_color_start = self.profile.enabled.then(crate::profile::tick);
                     color_convert(
                         &raw_samples,
                         self.color_convert_16,
@@ -1306,6 +1506,11 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                         width,
                         padded_width
                     )?;
+                    #[cfg(feature = "profile-active")]
+                    if let Some(started) = profile_color_start {
+                        profile_color_nanos += crate::profile::elapsed_ticks(started);
+                        profile_color_calls += 1;
+                    }
                     px += output_stride;
                 }
                 Ok(())
@@ -1314,6 +1519,8 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
         let comps = &mut self.components[..];
 
         if self.is_interleaved && self.options.jpeg_get_out_colorspace() != ColorSpace::Luma {
+            #[cfg(feature = "profile-active")]
+            let profile_upsample_start = self.profile.enabled.then(crate::profile::tick);
             for comp in comps.iter_mut() {
                 upsample(
                     comp,
@@ -1322,6 +1529,22 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                     upsampler_scratch_space,
                     is_vertically_sampled
                 )?;
+            }
+            #[cfg(feature = "profile-active")]
+            if let Some(started) = profile_upsample_start {
+                self.profile.upsample_ticks += crate::profile::elapsed_ticks(started);
+                for component in comps.iter() {
+                    self.profile.upsample_pointer_calls += 1;
+                    self.profile.upsample_destination_bytes +=
+                        (component.upsample_dest.len() * 2) as u64;
+                    match component.sample_ratio {
+                        SampleRatios::None => self.profile.upsample_none_calls += 1,
+                        SampleRatios::H => self.profile.upsample_horizontal_calls += 1,
+                        SampleRatios::V => self.profile.upsample_vertical_calls += 1,
+                        SampleRatios::HV => self.profile.upsample_hv_calls += 1,
+                        SampleRatios::Generic(_, _) => {}
+                    }
+                }
             }
 
             if is_vertically_sampled {
@@ -1415,6 +1638,18 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
         }
 
         *pixels_written = px;
+        #[cfg(feature = "profile-active")]
+        if self.profile.enabled {
+            self.profile.color_convert_calls += profile_color_calls;
+            self.profile.color_pointer_calls += profile_color_calls;
+            self.profile.color_convert_ticks += profile_color_nanos;
+            self.profile.color_input_bytes +=
+                profile_color_calls * padded_width as u64 * comp_len as u64 * 2;
+            self.profile.packed_output_bytes += profile_color_calls * row_bytes as u64;
+            if let Some(started) = profile_post_start {
+                self.profile.post_process_ticks += crate::profile::elapsed_ticks(started);
+            }
+        }
         Ok(())
     }
 }

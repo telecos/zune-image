@@ -4,6 +4,9 @@ version = "0.1.0"
 rust-version = "1.87.0"
 edition = "2021"
 
+[features]
+profile-active = ["zune-jpeg/profile-active"]
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dev-dependencies]
@@ -69,6 +72,11 @@ harness = false
 [[bench]]
 name = "decode_jpeg_colorspaces"
 harness = false
+
+[[bench]]
+name = "jpeg_phase_profile"
+harness = false
+required-features = ["profile-active"]
 
 [[bench]]
 name = "decode_hdr"
