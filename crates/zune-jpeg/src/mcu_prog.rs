@@ -52,12 +52,10 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
         // while receiving the buffers separately.
         let mut block = core::mem::take(&mut self.progressive_mcus_buffer);
         let mut scan_block = core::mem::take(&mut self.progressive_scan_buffer);
-        let result = self.decode_mcu_ycbcr_progressive_inner::<B>(
-            output,
-            &mut block,
-            &mut scan_block,
-        );
-        if matches!(&result, Err(error) if error.is_recoverable_eof() || matches!(error, DecodeErrors::Cancelled)) {
+        let result =
+            self.decode_mcu_ycbcr_progressive_inner::<B>(output, &mut block, &mut scan_block);
+        if matches!(&result, Err(error) if error.is_recoverable_eof() || matches!(error, DecodeErrors::Cancelled))
+        {
             self.progressive_scan_buffer = scan_block;
         }
         self.progressive_mcus_buffer = block;
@@ -71,10 +69,24 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
         clippy::too_many_lines
     )]
     fn decode_mcu_ycbcr_progressive_inner<B: BitStream>(
-        &mut self, output: &mut McuDecodeOutput<'_, '_>, block: &mut [Vec<i16>; MAX_COMPONENTS]
-        , scan_block: &mut [Vec<i16>; MAX_COMPONENTS]
+        &mut self, output: &mut McuDecodeOutput<'_, '_>, block: &mut [Vec<i16>; MAX_COMPONENTS],
+        scan_block: &mut [Vec<i16>; MAX_COMPONENTS]
     ) -> Result<(), DecodeErrors> {
         setup_component_params(self)?;
+        #[cfg(feature = "profile-active")]
+        if self.profile.enabled {
+            self.profile.width = self.info.width;
+            self.profile.height = self.info.height;
+            self.profile.components = u8::try_from(self.components.len()).unwrap_or(u8::MAX);
+            self.profile.mcu_rows = self.mcu_y as u64;
+            self.profile.mcus = (self.mcu_x * self.mcu_y) as u64;
+            for (index, component) in self.components.iter().enumerate().take(MAX_COMPONENTS) {
+                self.profile.sampling[index] = (
+                    u8::try_from(component.horizontal_sample).unwrap_or(u8::MAX),
+                    u8::try_from(component.vertical_sample).unwrap_or(u8::MAX)
+                );
+            }
+        }
         let mut mcu_height;
         let mut mcu_width;
 
@@ -121,9 +133,18 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
         for (i, comp) in self.components.iter().enumerate() {
             let len = mcu_width * comp.vertical_sample * comp.horizontal_sample * mcu_height;
             if block[i].len() != len {
+                #[cfg(feature = "profile-active")]
+                if self.profile.enabled {
+                    self.profile.capacity_growths += 1;
+                    self.profile.progressive_init_bytes += (len * 2) as u64;
+                }
                 block[i].clear();
                 block[i].resize(len, 0);
             } else if self.progressive_completed_scans == 0 {
+                #[cfg(feature = "profile-active")]
+                if self.profile.enabled {
+                    self.profile.progressive_init_bytes += (len * 2) as u64;
+                }
                 block[i].fill(0);
             }
         }
@@ -132,13 +153,18 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
 
         let preserve_progressive_scans = self.mcu_checkpoints_enabled;
 
-        if !self.decode_progressive_scan(
+        #[cfg(feature = "profile-active")]
+        let profile_scan_start = self.profile.enabled.then(crate::profile::tick);
+        let scan_continues = self.decode_progressive_scan(
             &mut stream,
             block,
             scan_block,
             output,
-            preserve_progressive_scans,
-        )? {
+            preserve_progressive_scans
+        )?;
+        #[cfg(feature = "profile-active")]
+        self.record_profile_scan(profile_scan_start);
+        if !scan_continues {
             return self.finish_progressive_decoding(block, output);
         }
         if self.progressive_completed_scans > self.options.jpeg_get_max_scans() {
@@ -180,13 +206,18 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                         self.spec_start,
                         self.spec_end
                     );
-                    if !self.decode_progressive_scan(
+                    #[cfg(feature = "profile-active")]
+                    let profile_scan_start = self.profile.enabled.then(crate::profile::tick);
+                    let scan_continues = self.decode_progressive_scan(
                         &mut stream,
                         block,
                         scan_block,
                         output,
                         preserve_progressive_scans
-                    )? {
+                    )?;
+                    #[cfg(feature = "profile-active")]
+                    self.record_profile_scan(profile_scan_start);
+                    if !scan_continues {
                         break 'eoi;
                     }
 
@@ -280,6 +311,10 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
             }
 
             if fine_resume.is_none() {
+                #[cfg(feature = "profile-active")]
+                if self.profile.enabled {
+                    self.profile.progressive_copy_bytes += (block[idx].len() * 2) as u64;
+                }
                 scan_block[idx].clear();
                 scan_block[idx].extend_from_slice(&block[idx]);
             } else if scan_block[idx].len() != block[idx].len() {
@@ -355,6 +390,33 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
         self.progressive_completed_scans += 1;
         self.invalidate_progressive_scan_checkpoint();
         Ok(true)
+    }
+
+    #[cfg(feature = "profile-active")]
+    fn record_profile_scan(&mut self, started: Option<crate::profile::ProfileTick>) {
+        if !self.profile.enabled {
+            return;
+        }
+        let kind = match (self.spec_start == 0, self.succ_high == 0) {
+            (true, true) => crate::profile::ProfileScanKind::DcFirst,
+            (true, false) => crate::profile::ProfileScanKind::DcRefine,
+            (false, true) => crate::profile::ProfileScanKind::AcFirst,
+            (false, false) => crate::profile::ProfileScanKind::AcRefine
+        };
+        let component_index = (self.num_scans == 1).then_some(self.z_order[0]);
+        let component = component_index
+            .and_then(|index| i8::try_from(index).ok())
+            .unwrap_or(-1);
+        let mcus = component_index.map_or((self.mcu_x * self.mcu_y) as u64, |index| {
+            let (width, height) = self.get_non_interleaved_dimensions(index);
+            (width * height) as u64
+        });
+        self.profile.push_scan(crate::profile::ProfileScan {
+            kind,
+            component,
+            ticks: started.map_or(0, crate::profile::elapsed_ticks),
+            mcus
+        });
     }
 
     fn decode_progressive_scan_direct<B: BitStream>(
@@ -472,7 +534,7 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
     }
 
     fn checkpoint_progressive_dc_first_row<B: BitStream>(
-        &mut self, stream: &B, next_mcu_row: usize,
+        &mut self, stream: &B, next_mcu_row: usize
     ) -> Result<(), DecodeErrors> {
         if next_mcu_row % PROGRESSIVE_CHECKPOINT_ROW_INTERVAL == 0
             && self.progressive_fine_checkpoints_enabled::<B>()
@@ -491,7 +553,7 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
     #[allow(clippy::too_many_lines, clippy::cast_sign_loss)]
     fn parse_entropy_coded_data<B: BitStream>(
         &mut self, stream: &mut B, buffer: &mut [Vec<i16>; MAX_COMPONENTS],
-        fine_resume: Option<&ProgressiveFineCheckpoint>,
+        fine_resume: Option<&ProgressiveFineCheckpoint>
     ) -> Result<(), DecodeErrors> {
         self.reset_prog_params(stream);
         if let Some(checkpoint) = fine_resume {
@@ -530,9 +592,8 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
             // Dispatch depending on type
             if self.spec_start == 0 {
                 if self.succ_high == 0 {
-                    let resume_position = fine_resume.map(|checkpoint| {
-                        (checkpoint.mcu_row, checkpoint.mcu_col)
-                    });
+                    let resume_position =
+                        fine_resume.map(|checkpoint| (checkpoint.mcu_row, checkpoint.mcu_col));
                     self.parse_dc_first_non_interleaved(stream, buffer, k, resume_position)?;
                 } else {
                     self.parse_dc_refine_non_interleaved(stream, buffer, k)?;
@@ -562,9 +623,8 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
             }
 
             if self.succ_high == 0 {
-                let resume_position = fine_resume.map(|checkpoint| {
-                    (checkpoint.mcu_row, checkpoint.mcu_col)
-                });
+                let resume_position =
+                    fine_resume.map(|checkpoint| (checkpoint.mcu_row, checkpoint.mcu_col));
                 self.parse_dc_first_interleaved(stream, buffer, resume_position)?;
             } else {
                 self.parse_dc_refine_interleaved(stream, buffer)?;
@@ -585,7 +645,7 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
 
     fn parse_dc_first_non_interleaved<B: BitStream>(
         &mut self, stream: &mut B, buffer: &mut [Vec<i16>; MAX_COMPONENTS], k: usize,
-        resume_position: Option<(usize, usize)>,
+        resume_position: Option<(usize, usize)>
     ) -> Result<(), DecodeErrors> {
         let (mcu_width, mcu_height) = self.get_non_interleaved_dimensions(k);
         let dc_pos = self.components[k].dc_huff_table % MAX_COMPONENTS;
@@ -594,6 +654,10 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
 
         let mut cancel = self.cancel_debounced(mcu_width);
         for i in resume_row..mcu_height {
+            #[cfg(feature = "profile-active")]
+            if self.profile.enabled {
+                self.profile.cancellation_polls += 1;
+            }
             if cancel.is_cancelled() {
                 return Err(DecodeErrors::Cancelled);
             }
@@ -632,6 +696,10 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
 
         let mut cancel = self.cancel_debounced(mcu_width);
         for i in 0..mcu_height {
+            #[cfg(feature = "profile-active")]
+            if self.profile.enabled {
+                self.profile.cancellation_polls += 1;
+            }
             if cancel.is_cancelled() {
                 return Err(DecodeErrors::Cancelled);
             }
@@ -658,6 +726,10 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
 
         let mut cancel = self.cancel_debounced(mcu_width);
         for i in 0..mcu_height {
+            #[cfg(feature = "profile-active")]
+            if self.profile.enabled {
+                self.profile.cancellation_polls += 1;
+            }
             if cancel.is_cancelled() {
                 return Err(DecodeErrors::Cancelled);
             }
@@ -699,6 +771,10 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
 
         let mut cancel = self.cancel_debounced(mcu_width);
         for i in 0..mcu_height {
+            #[cfg(feature = "profile-active")]
+            if self.profile.enabled {
+                self.profile.cancellation_polls += 1;
+            }
             if cancel.is_cancelled() {
                 return Err(DecodeErrors::Cancelled);
             }
@@ -722,11 +798,15 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
 
     fn parse_dc_first_interleaved<B: BitStream>(
         &mut self, stream: &mut B, buffer: &mut [Vec<i16>; MAX_COMPONENTS],
-        resume_position: Option<(usize, usize)>,
+        resume_position: Option<(usize, usize)>
     ) -> Result<(), DecodeErrors> {
         let mut cancel = self.cancel_debounced(self.mcu_x);
         let (resume_row, resume_col) = resume_position.unwrap_or((0, 0));
         for i in resume_row..self.mcu_y {
+            #[cfg(feature = "profile-active")]
+            if self.profile.enabled {
+                self.profile.cancellation_polls += 1;
+            }
             if cancel.is_cancelled() {
                 return Err(DecodeErrors::Cancelled);
             }
@@ -771,6 +851,10 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
     ) -> Result<(), DecodeErrors> {
         let mut cancel = self.cancel_debounced(self.mcu_x);
         for i in 0..self.mcu_y {
+            #[cfg(feature = "profile-active")]
+            if self.profile.enabled {
+                self.profile.cancellation_polls += 1;
+            }
             if cancel.is_cancelled() {
                 return Err(DecodeErrors::Cancelled);
             }
@@ -815,7 +899,12 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
     pub(crate) fn handle_rst_main<B: BitStream>(
         &mut self, stream: &mut B
     ) -> Result<(), DecodeErrors> {
-        self.handle_rst_main_inner(stream).map(|_| ())
+        let handled_restart = self.handle_rst_main_inner(stream)?;
+        #[cfg(feature = "profile-active")]
+        if handled_restart && self.profile.enabled {
+            self.profile.restart_markers += 1;
+        }
+        Ok(())
     }
 
     fn handle_rst_main_inner<B: BitStream>(
@@ -898,13 +987,20 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
     ) -> Result<bool, DecodeErrors> {
         let was_due = self.todo == 0;
         let handled_restart = self.handle_rst_main_inner(stream)?;
-        Ok(was_due && handled_restart)
+        let handled_restart = was_due && handled_restart;
+        #[cfg(feature = "profile-active")]
+        if handled_restart && self.profile.enabled {
+            self.profile.restart_markers += 1;
+        }
+        Ok(handled_restart)
     }
     #[allow(clippy::too_many_lines)]
     #[allow(clippy::needless_range_loop, clippy::cast_sign_loss)]
     fn finish_progressive_decoding(
         &mut self, block: &[Vec<i16>; MAX_COMPONENTS], output: &mut McuDecodeOutput<'_, '_>
     ) -> Result<(), DecodeErrors> {
+        #[cfg(feature = "profile-active")]
+        let profile_reconstruct_start = self.profile.enabled.then(crate::profile::tick);
         // Rendering replaces the caller's output row by row. Until every row
         // succeeds, the buffer may contain a mix of preview generations and
         // must not be advertised as a displayable progressive frame.
@@ -976,6 +1072,11 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                 let len = comp.width_stride * comp.vertical_sample * 8;
 
                 comp.needed = true;
+                #[cfg(feature = "profile-active")]
+                if self.profile.enabled {
+                    self.profile.capacity_growths += 1;
+                    self.profile.progressive_init_bytes += (len * 2) as u64;
+                }
                 comp.raw_coeff = vec![0; len];
             } else {
                 comp.needed = false;
@@ -993,9 +1094,15 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
         // dequantize, idct and color convert.
         let mut cancel = self.cancel_debounced(self.mcu_x);
         for i in stripe_start..stripe_end {
+            #[cfg(feature = "profile-active")]
+            if self.profile.enabled {
+                self.profile.cancellation_polls += 1;
+            }
             if cancel.is_cancelled() {
                 return Err(DecodeErrors::Cancelled);
             }
+            #[cfg(feature = "profile-active")]
+            let profile_transform_start = self.profile.enabled.then(crate::profile::tick);
             'component: for (position, component) in &mut self.components.iter_mut().enumerate() {
                 if !component.needed {
                     continue 'component;
@@ -1038,17 +1145,42 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                             ));
                         };
                         // dequantize
+                        #[cfg(feature = "profile-active")]
+                        let profile_sample = self.profile.enabled
+                            && crate::profile::DecodeProfile::sample_kind(
+                                self.profile.idct_pointer_calls
+                            ) == 1;
+                        #[cfg(feature = "profile-active")]
+                        let profile_dequant_start = profile_sample.then(crate::profile::tick);
                         for ((x, out), qt_val) in
                             qt_slice.iter().zip(tmp.iter_mut()).zip(qt_table.iter())
                         {
                             *out = i32::from(*x) * qt_val;
+                        }
+                        #[cfg(feature = "profile-active")]
+                        if let Some(started) = profile_dequant_start {
+                            self.profile.dequant_samples += 1;
+                            self.profile.dequant_ticks += self.profile.sampled_ticks(started);
                         }
                         // determine where to write.
                         let sl = &mut temp_channel[component.idct_pos..];
 
                         component.idct_pos += 8;
                         // tmp now contains a dequantized block so idct it
+                        #[cfg(feature = "profile-active")]
+                        let profile_idct_start = profile_sample.then(crate::profile::tick);
                         (self.idct_func)(&mut tmp, sl, component.width_stride);
+                        #[cfg(feature = "profile-active")]
+                        if self.profile.enabled {
+                            self.profile.blocks_by_component[position] += 1;
+                            self.profile.idct_8x8_calls += 1;
+                            self.profile.idct_pointer_calls += 1;
+                            self.profile.raw_coeff_bytes += 128;
+                            if let Some(started) = profile_idct_start {
+                                self.profile.idct_8x8_samples += 1;
+                                self.profile.idct_8x8_ticks += self.profile.sampled_ticks(started);
+                            }
+                        }
                     }
                     // after every write of 8, skip 7 since idct write stride wise 8 times.
                     //
@@ -1059,6 +1191,10 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                     component.idct_pos += 7 * component.width_stride;
                 }
                 component.idct_pos = 0;
+            }
+            #[cfg(feature = "profile-active")]
+            if let Some(started) = profile_transform_start {
+                self.profile.progressive_transform_ticks += crate::profile::elapsed_ticks(started);
             }
 
             // process that width up until it's impossible
@@ -1098,6 +1234,11 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
         trace!("Finished decoding image");
 
         self.progressive_render_incomplete = false;
+
+        #[cfg(feature = "profile-active")]
+        if let Some(started) = profile_reconstruct_start {
+            self.profile.progressive_reconstruct_ticks += crate::profile::elapsed_ticks(started);
+        }
 
         return Ok(());
     }

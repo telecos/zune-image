@@ -26,6 +26,8 @@ std = ["zune-core/std"]
 portable_simd = []
 arith = []
 log = ["zune-core/log"]
+profile = ["std"]
+profile-active = ["profile"]
 default = ["x86", "neon", "std"]
 
 

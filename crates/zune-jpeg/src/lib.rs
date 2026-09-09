@@ -324,6 +324,8 @@ pub use crate::decoder::{
     ScanlineReadStatus, ScanlineStatus
 };
 pub use crate::marker::Marker;
+#[cfg(feature = "profile-active")]
+pub use crate::profile::{DecodeProfile, ProfileScan, ProfileScanKind};
 mod bitstream;
 #[cfg(feature = "arith")]
 mod bitstream_arith;
@@ -342,6 +344,8 @@ mod marker;
 mod mcu;
 mod mcu_prog;
 mod misc;
+#[cfg(feature = "profile-active")]
+mod profile;
 mod unsafe_utils;
 mod unsafe_utils_avx2;
 mod unsafe_utils_neon;
