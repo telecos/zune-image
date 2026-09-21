@@ -89,7 +89,7 @@ fn decode_whole(bytes: &[u8]) -> (Vec<Vec<u8>>, [zune_jpeg::PlaneInfo; 4], usize
         .map(|index| vec![0; layout[index].byte_size])
         .collect();
     let mut refs: Vec<&mut [u8]> = planes.iter_mut().map(Vec::as_mut_slice).collect();
-    raw.decode_into(&mut refs).unwrap();
+    raw.decode_into_planes(&mut refs).unwrap();
     (planes, layout, count)
 }
 
@@ -931,7 +931,7 @@ fn switching_pull_to_whole_raw_is_rejected() {
         .collect();
     let mut whole_refs: Vec<&mut [u8]> = whole.iter_mut().map(Vec::as_mut_slice).collect();
     assert!(matches!(
-        raw.decode_into(&mut whole_refs),
+        raw.decode_into_planes(&mut whole_refs),
         Err(DecodeErrors::FormatStatic(_))
     ));
 }
@@ -955,7 +955,7 @@ fn invalid_pull_does_not_claim_raw_output_ownership() {
         .map(|plane| vec![0; plane.byte_size])
         .collect();
     let mut whole_refs: Vec<&mut [u8]> = whole.iter_mut().map(Vec::as_mut_slice).collect();
-    raw.decode_into(&mut whole_refs).unwrap();
+    raw.decode_into_planes(&mut whole_refs).unwrap();
     assert!(whole
         .iter()
         .all(|plane| plane.iter().any(|byte| *byte != 0)));
@@ -987,7 +987,7 @@ fn invalid_pull_stride_does_not_claim_raw_output_ownership() {
         .map(|plane| vec![0; plane.byte_size])
         .collect();
     let mut whole_refs: Vec<&mut [u8]> = whole.iter_mut().map(Vec::as_mut_slice).collect();
-    raw.decode_into(&mut whole_refs).unwrap();
+    raw.decode_into_planes(&mut whole_refs).unwrap();
     assert!(whole
         .iter()
         .all(|plane| plane.iter().any(|byte| *byte != 0)));
