@@ -19,6 +19,7 @@ use zune_core::options::DecoderOptions;
 mod bmp;
 mod inflate;
 mod jpeg;
+mod jpeg_fuzz_corpus;
 mod png;
 mod psd;
 
