@@ -57,9 +57,9 @@ fn progressive_raw_planes_match_libjpeg_turbo() {
                     maximum_delta = maximum_delta.max(actual_sample.abs_diff(reference_sample));
                 }
             }
-            assert!(
-                maximum_delta <= 2,
-                "{name}, component {index}: maximum delta {maximum_delta} exceeds 2"
+            assert_eq!(
+                maximum_delta, 0,
+                "{name}, component {index}: raw samples differ from libjpeg-turbo"
             );
         }
     }
