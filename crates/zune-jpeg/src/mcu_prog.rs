@@ -1347,6 +1347,12 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                         if let Some(smoothing) = &smoothing {
                             smoothing.apply(j, i * component.vertical_sample + k, &mut tmp);
                         }
+                        if let McuDecodeOutput::Scaled(scaled) = output {
+                            scaled.write_block(
+                                position, j, i * component.vertical_sample + k, &mut tmp,
+                            )?;
+                            continue;
+                        }
                         // determine where to write.
                         let sl = &mut temp_channel[component.idct_pos..];
 
@@ -1367,6 +1373,7 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
 
             // process that width up until it's impossible
             match output {
+                McuDecodeOutput::Scaled(_) => {},
                 McuDecodeOutput::Pixels(pixels) => self.post_process(
                     pixels,
                     width * self.options.jpeg_get_out_colorspace().num_components(),
