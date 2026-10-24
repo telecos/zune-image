@@ -1349,7 +1349,7 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                         }
                         if let McuDecodeOutput::Scaled(scaled) = output {
                             scaled.write_block(
-                                position, j, i * component.vertical_sample + k, &mut tmp,
+                                position, j, i * component.vertical_sample + k, &tmp,
                             )?;
                             continue;
                         }
@@ -1719,9 +1719,9 @@ mod tests {
     #[test]
     #[cfg(feature = "std")]
     fn progressive_smoothing_retry_does_not_commit_estimates_or_precision() {
+        use alloc::rc::Rc;
         use std::cell::Cell;
         use std::io::{self, BufRead, Read, Seek, SeekFrom};
-        use std::rc::Rc;
 
         struct GrowingInput {
             data:     Vec<u8>,
