@@ -84,9 +84,11 @@ macro_rules! decode_huff {
             }
 
             if code_length == 17{
+                $stream.corrupt_data = true;
                 if $stream.strict {
                     return Err(DecodeErrors::FormatStatic("Bad Huffman Code Corrupt JPEG"));
                 }
+                warn!("Bad Huffman code in JPEG entropy");
                 // The sequential recovery rule consumes the invalid 17-bit
                 // code and substitutes a zero symbol, not the rest of the scan.
                 $symbol = 0;
@@ -124,7 +126,8 @@ pub(crate) struct HuffmanBitstreamState {
     pub(crate) seen_eoi:          bool,
     pub(crate) eob_run:           i32,
     pub(crate) marker_bits:       Option<u8>,
-    pub(crate) insufficient_data: bool
+    pub(crate) insufficient_data: bool,
+    pub(crate) corrupt_data:      bool
 }
 
 /// Type-erased bitstream state snapshot stored in `ScanCheckpoint`.
@@ -151,6 +154,12 @@ pub(crate) trait BitStream {
     fn new() -> Self;
 
     fn begin_mcu(&mut self) {}
+
+    fn has_corrupt_data(&self) -> bool {
+        false
+    }
+
+    fn clear_huffman_code_warning(&mut self) {}
 
     /// Create a new Bitstream for progressive decoding
     fn new_progressive(al: u8, spec_start: u8, spec_end: u8) -> Self;
@@ -314,6 +323,7 @@ pub(crate) struct BitStreamHuffman {
     insufficient_data:   bool,
     // Latched at the MCU boundary, not between components of the same MCU.
     skip_mcu:            bool,
+    corrupt_data:        bool,
 }
 
 impl BitStreamHuffman {
@@ -553,9 +563,11 @@ impl BitStreamHuffman {
                 length += 1;
             }
             if length == 17 {
+                self.corrupt_data = true;
                 if self.strict {
                     return Err(DecodeErrors::FormatStatic("Bad Huffman Code Corrupt JPEG"));
                 }
+                warn!("Bad Huffman code in progressive JPEG entropy");
                 symbol = 0;
             }
         }
@@ -677,6 +689,7 @@ impl BitStream for BitStreamHuffman {
             marker_bits:         None,
             insufficient_data:   false,
             skip_mcu:            false,
+            corrupt_data:        false,
         }
     }
 
@@ -703,6 +716,7 @@ impl BitStream for BitStreamHuffman {
             marker_bits:         None,
             insufficient_data:   false,
             skip_mcu:            false,
+            corrupt_data:        false,
         }
     }
 
@@ -712,6 +726,14 @@ impl BitStream for BitStreamHuffman {
 
     fn begin_mcu(&mut self) {
         self.skip_mcu = self.insufficient_data && !self.strict;
+    }
+
+    fn has_corrupt_data(&self) -> bool {
+        self.corrupt_data || self.insufficient_data
+    }
+
+    fn clear_huffman_code_warning(&mut self) {
+        self.corrupt_data = false;
     }
 
     #[inline(always)]
@@ -767,6 +789,7 @@ impl BitStream for BitStreamHuffman {
             eob_run:        self.eob_run,
             marker_bits:    self.marker_bits,
             insufficient_data: self.insufficient_data,
+            corrupt_data: self.corrupt_data
         }
     }
 
@@ -784,6 +807,7 @@ impl BitStream for BitStreamHuffman {
         self.eob_run = state.eob_run;
         self.marker_bits = state.marker_bits;
         self.insufficient_data = state.insufficient_data;
+        self.corrupt_data = state.corrupt_data;
     }
 
     #[inline(always)]
@@ -1291,6 +1315,7 @@ impl BitStream for BitStreamHuffman {
         self.marker_bits = None;
         self.insufficient_data = false;
         self.skip_mcu = false;
+        self.corrupt_data = false;
     }
 }
 
