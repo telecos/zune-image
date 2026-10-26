@@ -449,7 +449,7 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
         if !use_scratch_coefficients {
             // The default first decode attempt takes this path and updates the
             // existing progressive buffers directly without cloning them.
-            return self.decode_progressive_scan_direct(stream, block);
+            return self.decode_progressive_scan_direct(stream, block, !output.is_raw());
         }
 
         // Incremental preservation was explicitly enabled for the first attempt,
@@ -483,7 +483,12 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
             }
         }
 
-        let result = self.parse_entropy_coded_data(stream, scan_block, fine_resume.as_ref());
+        let result = self.parse_entropy_coded_data(
+            stream,
+            scan_block,
+            fine_resume.as_ref(),
+            !output.is_raw()
+        );
 
         if let Err(e) = result {
             if matches!(e, DecodeErrors::Cancelled) {
@@ -555,9 +560,9 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
     }
 
     fn decode_progressive_scan_direct<B: BitStream>(
-        &mut self, stream: &mut B, block: &mut [Vec<i16>; MAX_COMPONENTS]
+        &mut self, stream: &mut B, block: &mut [Vec<i16>; MAX_COMPONENTS], suspend_dc_eof: bool
     ) -> Result<bool, DecodeErrors> {
-        let result = self.parse_entropy_coded_data(stream, block, None);
+        let result = self.parse_entropy_coded_data(stream, block, None, suspend_dc_eof);
 
         if let Err(e) = result {
             if matches!(e, DecodeErrors::Cancelled) {
@@ -719,7 +724,7 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
     #[allow(clippy::too_many_lines, clippy::cast_sign_loss)]
     fn parse_entropy_coded_data<B: BitStream>(
         &mut self, stream: &mut B, buffer: &mut [Vec<i16>; MAX_COMPONENTS],
-        fine_resume: Option<&ProgressiveFineCheckpoint>,
+        fine_resume: Option<&ProgressiveFineCheckpoint>, suspend_dc_eof: bool
     ) -> Result<(), DecodeErrors> {
         self.reset_prog_params(stream);
         if let Some(checkpoint) = fine_resume {
@@ -760,7 +765,9 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                 if self.succ_high == 0 {
                     let resume_position =
                         fine_resume.map(|checkpoint| (checkpoint.mcu_row, checkpoint.mcu_col));
-                    self.parse_dc_first_non_interleaved(stream, buffer, k, resume_position)?;
+                    self.parse_dc_first_non_interleaved(
+                        stream, buffer, k, resume_position, suspend_dc_eof
+                    )?;
                 } else {
                     self.parse_dc_refine_non_interleaved(stream, buffer, k)?;
                 }
@@ -791,7 +798,7 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
             if self.succ_high == 0 {
                 let resume_position =
                     fine_resume.map(|checkpoint| (checkpoint.mcu_row, checkpoint.mcu_col));
-                self.parse_dc_first_interleaved(stream, buffer, resume_position)?;
+                self.parse_dc_first_interleaved(stream, buffer, resume_position, suspend_dc_eof)?;
             } else {
                 self.parse_dc_refine_interleaved(stream, buffer)?;
             }
@@ -811,7 +818,7 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
 
     fn parse_dc_first_non_interleaved<B: BitStream>(
         &mut self, stream: &mut B, buffer: &mut [Vec<i16>; MAX_COMPONENTS], k: usize,
-        resume_position: Option<(usize, usize)>
+        resume_position: Option<(usize, usize)>, suspend_dc_eof: bool
     ) -> Result<(), DecodeErrors> {
         let (mcu_width, mcu_height) = self.get_non_interleaved_dimensions(k);
         let dc_pos = self.components[k].dc_huff_table % MAX_COMPONENTS;
@@ -846,6 +853,7 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                         dc_pred,
                         &mut component.dc_pred,
                         &mut component.dc_diff,
+                        suspend_dc_eof
                     )?;
 
                     self.todo -= 1;
@@ -965,7 +973,7 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
 
     fn parse_dc_first_interleaved<B: BitStream>(
         &mut self, stream: &mut B, buffer: &mut [Vec<i16>; MAX_COMPONENTS],
-        resume_position: Option<(usize, usize)>
+        resume_position: Option<(usize, usize)>, suspend_dc_eof: bool
     ) -> Result<(), DecodeErrors> {
         let mut cancel = self.cancel_debounced(self.mcu_x);
         let (resume_row, resume_col) = resume_position.unwrap_or((0, 0));
@@ -1000,6 +1008,7 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                                 data,
                                 &mut component.dc_pred,
                                 &mut component.dc_diff,
+                                suspend_dc_eof
                             )?;
                         }
                     }
@@ -1216,8 +1225,7 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
         let mut tmp = [0_i32; DCT_BLOCK];
 
         let raw_mode = output.is_raw();
-        let smoothing_enabled = raw_mode
-            && self.components.iter().all(|component| {
+        let smoothing_enabled = self.components.iter().all(|component| {
                 component.progressive_bits[0] >= 0
                     && SMOOTHING_COEFFICIENTS
                         .iter()
@@ -1582,6 +1590,28 @@ mod tests {
     }
 
     #[test]
+    fn packed_progressive_dc_eof_preserves_suspension_frontier() {
+        use zune_core::colorspace::ColorSpace;
+
+        for (truncated, eoi) in [(false, true), (false, false), (true, false)] {
+            let data = noninterleaved_dc_jpeg(3, truncated, eoi);
+            let options = DecoderOptions::default()
+                .set_strict_mode(false)
+                .jpeg_set_out_colorspace(ColorSpace::RGB);
+            let mut decoder = JpegDecoder::new_with_options(ZCursor::new(&data), options);
+            let pixels = decoder.decode().unwrap();
+            assert_eq!(decoder.progressive_mcus_buffer[0][0], 128);
+            assert_eq!(decoder.progressive_mcus_buffer[1][0], 128);
+            assert_eq!(
+                decoder.progressive_mcus_buffer[2][0],
+                if eoi { 128 } else { 0 }
+            );
+            let expected = if eoi { [166, 127, 172] } else { [144, 138, 172] };
+            assert!(pixels.chunks_exact(3).all(|pixel| pixel == expected));
+        }
+    }
+
+    #[test]
     fn packed_progressive_best_effort_preserves_supported_malformed_scans() {
         use zune_core::colorspace::ColorSpace;
 
@@ -1676,6 +1706,30 @@ mod tests {
                 assert!(decoder.components[0].progressive_bits[1..]
                     .iter()
                     .all(|&bits| bits == if complete_ac { 0 } else { -1 }));
+            }
+        }
+    }
+
+    #[test]
+    fn progressive_packed_smoothing_matches_libjpeg() {
+        for (complete_ac, expected) in [
+            (false, 0xa007_fba6_4972_7faa),
+            (true, 0xd39b_63bf_88b1_b6ed)
+        ] {
+            let data = smoothing_jpeg(complete_ac);
+            for options in [DecoderOptions::new_safe(), DecoderOptions::new_fast()] {
+                let mut decoder = JpegDecoder::new_with_options(
+                    ZCursor::new(&data),
+                    options
+                        .set_strict_mode(false)
+                        .jpeg_set_out_colorspace(zune_core::colorspace::ColorSpace::Luma)
+                );
+                let pixels = decoder.decode().unwrap();
+                assert_eq!(pixels.len(), 22 * 19);
+                assert_eq!(plane_hash(&pixels, 22), expected);
+                assert!(decoder.progressive_mcus_buffer[0]
+                    .chunks_exact(64)
+                    .all(|block| block[1..].iter().all(|&value| value == 0)));
             }
         }
     }
