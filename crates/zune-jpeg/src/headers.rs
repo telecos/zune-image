@@ -19,9 +19,9 @@ use zune_core::bytestream::ZByteReaderTrait;
 use zune_core::log::{trace, warn};
 
 use crate::components::{Components, SampleRatios};
-use crate::decoder::{ExtendedXmpSegment, GainMapInfo, ICCChunk, JpegDecoder, MAX_COMPONENTS};
 #[cfg(feature = "arith")]
 use crate::decoder::MAX_ARITHMETIC_TABLES;
+use crate::decoder::{ExtendedXmpSegment, GainMapInfo, ICCChunk, JpegDecoder, MAX_COMPONENTS};
 use crate::errors::DecodeErrors;
 use crate::huffman::HuffmanTable;
 use crate::misc::{SOFMarkers, UN_ZIGZAG};
@@ -227,15 +227,23 @@ where
             let dc_or_ac = (ht_info >> 4) & 0xF;
             let index = (ht_info & 0xF) as usize;
 
-            if index >= MAX_ARITHMETIC_TABLES {
+            // Lossless residual contexts currently have four table destinations.
+            let table_limit = if decoder.seen_sof && decoder.info.sof.is_lossless() {
+                MAX_COMPONENTS
+            } else {
+                MAX_ARITHMETIC_TABLES
+            };
+            if index >= table_limit {
                 return Err(DecodeErrors::ArithmeticDecode(format!(
                     "Invalid DAC index {index}, expected between 0 and {}",
-                    MAX_ARITHMETIC_TABLES - 1
+                    table_limit - 1
                 )));
             }
 
             if decoder.seen_sof && decoder.info.sof.is_lossless() && dc_or_ac != 0 {
-                return Err(DecodeErrors::FormatStatic("Lossless JPEG only permits DC arithmetic conditioning"));
+                return Err(DecodeErrors::FormatStatic(
+                    "Lossless JPEG only permits DC arithmetic conditioning"
+                ));
             }
             match dc_or_ac {
                 0 => {

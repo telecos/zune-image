@@ -16,9 +16,7 @@ use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use zune_benches::sample_path;
 use zune_jpeg::zune_core::colorspace::ColorSpace;
 use zune_jpeg::zune_core::options::DecoderOptions;
-use zune_jpeg::{
-    JpegDecoder, RawImcuRowStatus, ScanlineReadStatus, ScanlineStatus
-};
+use zune_jpeg::{JpegDecoder, RawImcuRowStatus, ScanlineReadStatus, ScanlineStatus};
 use zune_png::zune_core::bytestream::ZCursor;
 
 fn decode_jpeg(buf: &[u8]) -> Vec<u8> {
@@ -438,7 +436,7 @@ fn decode_jpeg_raw_pull(buf: &[u8]) -> u64 {
             }
             RawImcuRowStatus::Complete => break,
             RawImcuRowStatus::NeedMoreInput => panic!("one-shot benchmark input suspended"),
-            _ => unreachable!(),
+            _ => unreachable!()
         }
     }
     checksum
@@ -579,18 +577,29 @@ fn progressive_scan_ranges(data: &[u8]) -> Vec<ProgressiveScanRange> {
 }
 
 fn repeated_limits(start: usize, end: usize) -> [usize; 3] {
-    assert!(end > start + 3, "scan range is too small for repeated retries");
+    assert!(
+        end > start + 3,
+        "scan range is too small for repeated retries"
+    );
     let length = end - start;
-    [start + length / 4, start + length / 2, start + length * 3 / 4]
+    [
+        start + length / 4,
+        start + length / 2,
+        start + length * 3 / 4
+    ]
 }
 
 fn decode_with_repeated_growth(data: &[u8], limits: &[usize]) -> Vec<u8> {
-    let first_limit = *limits.first().expect("at least one retry limit is required");
+    let first_limit = *limits
+        .first()
+        .expect("at least one retry limit is required");
     let limit = Rc::new(Cell::new(first_limit));
     let cursor = GrowableCursor::new(data, Rc::clone(&limit));
     let mut decoder = JpegDecoder::new(cursor);
     decoder.set_incremental_mode(true);
-    decoder.decode_headers().expect("headers must fit before the first retry limit");
+    decoder
+        .decode_headers()
+        .expect("headers must fit before the first retry limit");
     let mut output = vec![0; decoder.output_buffer_size().unwrap()];
 
     for visible in limits {
@@ -612,10 +621,9 @@ fn decode_with_repeated_growth(data: &[u8], limits: &[usize]) -> Vec<u8> {
 /// successful decode. This zune-only group measures retry work; the progressive
 /// decode groups above provide one-shot zune-jpeg/mozjpeg comparisons.
 fn decode_repeated_retry_cost(c: &mut Criterion) {
-    let baseline = read(
-        sample_path().join("test-images/jpeg/benchmarks/speed_bench_hv_subsampling.jpg")
-    )
-    .unwrap();
+    let baseline =
+        read(sample_path().join("test-images/jpeg/benchmarks/speed_bench_hv_subsampling.jpg"))
+            .unwrap();
     let baseline_start = baseline
         .windows(2)
         .position(|window| window == [0xFF, 0xDA])
@@ -627,8 +635,8 @@ fn decode_repeated_retry_cost(c: &mut Criterion) {
     let baseline_entropy_start = baseline_start + 2 + baseline_sos_length;
     let baseline_limits = repeated_limits(baseline_entropy_start, baseline.len() - 2);
 
-    let progressive = read(sample_path().join("test-images/jpeg/benchmarks/speed_bench_prog.jpg"))
-        .unwrap();
+    let progressive =
+        read(sample_path().join("test-images/jpeg/benchmarks/speed_bench_prog.jpg")).unwrap();
     let scans = progressive_scan_ranges(&progressive);
     let dc_first = scans
         .iter()
@@ -639,8 +647,7 @@ fn decode_repeated_retry_cost(c: &mut Criterion) {
         .find(|scan| scan.spec_start > 0 && scan.succ_high > 0)
         .expect("progressive fixture must contain an AC-refinement scan");
     let dc_limits = repeated_limits(dc_first.data_start, dc_first.data_end);
-    let ac_refinement_limits =
-        repeated_limits(ac_refinement.data_start, ac_refinement.data_end);
+    let ac_refinement_limits = repeated_limits(ac_refinement.data_start, ac_refinement.data_end);
 
     let mut group = c.benchmark_group("jpeg: Repeated incremental retry cost");
     group.bench_function("baseline row checkpoints", |b| {

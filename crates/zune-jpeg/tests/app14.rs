@@ -15,6 +15,65 @@ use zune_jpeg::JpegDecoder;
 // 8382e7831896cd1adf1cc61a1c9e565c4030aa43.
 const RGB_OUTPUT_SIZE: usize = 32 * 32 * 3;
 
+#[test]
+fn input_override_changes_interpretation_without_changing_marker_metadata() {
+    let data = include_bytes!("../../../test-images/jpeg/app14/baseline_ycbcr.jpg");
+    let mut decoder = JpegDecoder::new(ZCursor::new(data));
+    decoder.decode_headers().unwrap();
+    assert_eq!(decoder.input_colorspace(), Some(ColorSpace::YCbCr));
+    let marker = decoder.adobe_transform();
+    decoder
+        .set_input_colorspace_override(Some(ColorSpace::RGB))
+        .unwrap();
+    assert_eq!(decoder.input_colorspace(), Some(ColorSpace::RGB));
+    assert_eq!(decoder.adobe_transform(), marker);
+    let forced = decoder.decode().unwrap();
+
+    let mut normal = JpegDecoder::new(ZCursor::new(data));
+    let automatic = normal.decode().unwrap();
+    assert_ne!(forced, automatic);
+    assert!(decoder.set_input_colorspace_override(None).is_err());
+}
+
+#[test]
+fn clearing_override_restores_header_selected_interpretation() {
+    let data = include_bytes!("../../../test-images/jpeg/app14/baseline_rgb.jpg");
+    let mut decoder = JpegDecoder::new(ZCursor::new(data));
+    decoder
+        .set_input_colorspace_override(Some(ColorSpace::YCbCr))
+        .unwrap();
+    decoder.decode_headers().unwrap();
+    assert_eq!(decoder.input_colorspace(), Some(ColorSpace::YCbCr));
+    assert_eq!(decoder.adobe_transform(), Some(0));
+    decoder.set_input_colorspace_override(None).unwrap();
+    assert_eq!(decoder.input_colorspace(), Some(ColorSpace::RGB));
+    let restored = decoder.decode().unwrap();
+    assert_eq!(
+        restored,
+        JpegDecoder::new(ZCursor::new(data)).decode().unwrap()
+    );
+}
+
+#[test]
+fn input_override_rejects_incompatible_components_without_changing_metadata() {
+    let data = include_bytes!("../../../test-images/jpeg/app14/baseline_cmyk.jpg");
+    let mut decoder = JpegDecoder::new(ZCursor::new(data));
+    decoder.decode_headers().unwrap();
+    assert!(decoder
+        .set_input_colorspace_override(Some(ColorSpace::RGB))
+        .is_err());
+    assert_eq!(decoder.input_colorspace(), Some(ColorSpace::CMYK));
+    assert!(decoder
+        .set_input_colorspace_override(Some(ColorSpace::RGBA))
+        .is_err());
+
+    let mut early = JpegDecoder::new(ZCursor::new(data));
+    early
+        .set_input_colorspace_override(Some(ColorSpace::RGB))
+        .unwrap();
+    assert!(early.decode_headers().is_err());
+}
+
 const BASELINE_RGB_FIXTURES: [(&str, &[u8]); 2] = [
     (
         "baseline_rgb",
@@ -232,7 +291,11 @@ fn ycck_decodes_to_cmyk_without_inverting() {
     let pixels = output.len() / 4;
     assert_eq!(pixels, 1318 * 611);
     let mean = |channel: usize| {
-        output.chunks_exact(4).map(|p| u64::from(p[channel])).sum::<u64>() / pixels as u64
+        output
+            .chunks_exact(4)
+            .map(|p| u64::from(p[channel]))
+            .sum::<u64>()
+            / pixels as u64
     };
     // A light image: little magenta or yellow, heavy cyan and black.
     assert_eq!([mean(0), mean(1), mean(2), mean(3)], [240, 58, 21, 216]);
@@ -240,7 +303,8 @@ fn ycck_decodes_to_cmyk_without_inverting() {
 
 #[test]
 fn single_component_transform_zero_remains_luma() {
-    let data = include_bytes!("../../../test-images/jpeg/app14/single_component_transform_zero.jpg");
+    let data =
+        include_bytes!("../../../test-images/jpeg/app14/single_component_transform_zero.jpg");
 
     for strict in [false, true] {
         let options = DecoderOptions::default()

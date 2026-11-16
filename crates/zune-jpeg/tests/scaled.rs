@@ -22,6 +22,13 @@ const SCALES: [JpegScale; 7] = [
     JpegScale::SevenEighths
 ];
 
+#[test]
+fn lossless_reduced_idct_is_rejected_at_selection() {
+    let bytes = include_bytes!("../../../test-images/jpeg/lossless/32x32x8_grayscale.jpg");
+    let decoder = JpegDecoder::new(ZCursor::new(bytes));
+    assert!(decoder.into_scaled(JpegScale::Half).is_err());
+}
+
 fn check_native_output(data: &[u8], expected: [u64; 7]) {
     for use_simd in [false, true] {
         let options = DecoderOptions::default().set_use_unsafe(use_simd);

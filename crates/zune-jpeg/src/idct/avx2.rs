@@ -232,19 +232,19 @@ unsafe fn idct_avx2_core(
 
             let t0 = _mm256_add_epi32(
                 _mm256_madd_epi16(r13, _mm256_set1_epi32(C_T0_13)),
-                _mm256_madd_epi16(r57, _mm256_set1_epi32(C_T0_57)),
+                _mm256_madd_epi16(r57, _mm256_set1_epi32(C_T0_57))
             );
             let t1 = _mm256_add_epi32(
                 _mm256_madd_epi16(r13, _mm256_set1_epi32(C_T1_13)),
-                _mm256_madd_epi16(r57, _mm256_set1_epi32(C_T1_57)),
+                _mm256_madd_epi16(r57, _mm256_set1_epi32(C_T1_57))
             );
             let t2 = _mm256_add_epi32(
                 _mm256_madd_epi16(r13, _mm256_set1_epi32(C_T2_13)),
-                _mm256_madd_epi16(r57, _mm256_set1_epi32(C_T2_57)),
+                _mm256_madd_epi16(r57, _mm256_set1_epi32(C_T2_57))
             );
             let t3 = _mm256_add_epi32(
                 _mm256_madd_epi16(r13, _mm256_set1_epi32(C_T3_13)),
-                _mm256_madd_epi16(r57, _mm256_set1_epi32(C_T3_57)),
+                _mm256_madd_epi16(r57, _mm256_set1_epi32(C_T3_57))
             );
 
             row0.mm256 = _mm256_srai_epi32(_mm256_add_epi32(x0, t3), $scale);
@@ -265,8 +265,12 @@ unsafe fn idct_avx2_core(
             let tmp2 = p1 + row6 * -15137;
             let tmp3 = p1 + row2 * 6270;
 
-            let tmp0 = YmmRegister { mm256: _mm256_slli_epi32((row0 + row4).mm256, CONST_BITS) } + $SCALE_BITS;
-            let tmp1 = YmmRegister { mm256: _mm256_slli_epi32((row0 - row4).mm256, CONST_BITS) } + $SCALE_BITS;
+            let tmp0 = YmmRegister {
+                mm256: _mm256_slli_epi32((row0 + row4).mm256, CONST_BITS)
+            } + $SCALE_BITS;
+            let tmp1 = YmmRegister {
+                mm256: _mm256_slli_epi32((row0 - row4).mm256, CONST_BITS)
+            } + $SCALE_BITS;
 
             let x0 = tmp0 + tmp3;
             let x3 = tmp0 - tmp3;
@@ -303,7 +307,7 @@ unsafe fn idct_avx2_core(
         dct_pass_i32!(PASS1_ROUND, PASS1_SHIFT);
     }
     transpose(
-        &mut row0, &mut row1, &mut row2, &mut row3, &mut row4, &mut row5, &mut row6, &mut row7,
+        &mut row0, &mut row1, &mut row2, &mut row3, &mut row4, &mut row5, &mut row6, &mut row7
     );
 
     if rows_fit_i16!(
@@ -319,7 +323,6 @@ unsafe fn idct_avx2_core(
         row7.mm256, out_ptr, stride
     );
 }
-
 
 #[target_feature(enable = "avx2")]
 #[allow(
@@ -356,7 +359,7 @@ pub unsafe fn idct_avx2_4x4(in_vector: &mut [i32; 64], out_vector: &mut [i16], s
         ($SCALE_BITS:tt, $scale:tt) => {
             let t0_r = _mm256_add_epi32(
                 _mm256_slli_epi32(row0.mm256, CONST_BITS),
-                _mm256_set1_epi32($SCALE_BITS),
+                _mm256_set1_epi32($SCALE_BITS)
             );
             let r2_low = _mm256_and_si256(row2.mm256, _mm256_set1_epi32(0xFFFF));
             let p1 = _mm256_madd_epi16(r2_low, _mm256_set1_epi32(pair_i16(4433, 0)));

@@ -882,8 +882,8 @@ impl BitStream for BitStreamHuffman {
             seen_eoi:                self.seen_eoi,
             eob_run:                 self.eob_run,
             corrupt_data:            self.corrupt_data,
-            insufficient_data: self.insufficient_data,
-            skip_mcu: self.skip_mcu
+            insufficient_data:       self.insufficient_data,
+            skip_mcu:                self.skip_mcu
         }
     }
 

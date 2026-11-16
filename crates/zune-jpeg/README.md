@@ -27,6 +27,13 @@ fn main()->Result<(),DecoderErrors> {
 The decoder supports more manipulations via `DecoderOptions`,
 see additional documentation in the library.
 
+Container formats that supply their own RGB/YCbCr interpretation can call
+`set_input_colorspace_override(Some(ColorSpace::RGB))` (or `YCbCr`) before
+starting output. This controls input interpretation, not output conversion.
+Only three-component images are supported; clearing the override restores the
+header-selected interpretation. `adobe_transform()` exposes the original APP14
+transform after header decoding so the container can apply its precedence rules.
+
 ### Chroma reconstruction
 
 Full-size output uses native-compatible fancy chroma reconstruction. For

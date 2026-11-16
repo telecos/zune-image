@@ -366,7 +366,7 @@ impl BitStreamArithmetic {
 
     /// Decode the next bit, using the provided context index
     pub(crate) fn decode_bit<T>(
-        &mut self, context: &mut StatisticsEntry, reader: &mut ZReader<T>,
+        &mut self, context: &mut StatisticsEntry, reader: &mut ZReader<T>
     ) -> Result<u8, DecodeErrors>
     where
         T: ZByteReaderTrait

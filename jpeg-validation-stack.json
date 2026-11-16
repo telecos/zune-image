@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "base": "2cdbbf554e7da373d3418ab327a0db7c4abb50cd",
+  "repository": "https://github.com/etemesi254/zune-image",
+  "snapshot_date": "2026-11-16",
+  "pull_requests": [
+    { "number": 437, "head": "e87694f7a22d8a44995ba0003768337f57f4ef16", "scope": "progressive MCU checkpoints" },
+    { "number": 497, "head": "ecaeb69068f8b9d83e181684de9c7e99c5479980", "scope": "isolated raw reference tooling" },
+    { "number": 498, "head": "5269f58a1ab8ff9a8e82d3a0a0bc037dcc621be0", "scope": "reduced IDCT; inherited through 508" },
+    { "number": 504, "head": "22cf76f42e03b44dc4f4b17e6daa36e2be5c413c", "scope": "progressive smoothing and physical EOF; inherited through 508" },
+    { "number": 505, "head": "6b363c3a0f6a7cae637105727b88c05c5180630f", "scope": "owned chroma changes after f1ca8be1" },
+    { "number": 506, "head": "909c18b95ae4bb41ed769253ba327602fec30632", "scope": "sequential component scan recovery and regressions" },
+    { "number": 508, "head": "d1b70c229d00cfde75f4f0cbb1988c8449d13692", "scope": "publication row bounds and sampled scaled blocks" },
+    { "number": 516, "head": "ea9a8760cfaf2dc691d1783932f3beb4d88e73a1", "scope": "8-bit predictive lossless Huffman and arithmetic" },
+    { "number": 518, "head": "ae2ce1a3c0cdca7508a18e8721a552c0cce14e18", "scope": "owned Huffman recovery d0de1600; color prerequisites already in base" },
+    { "number": 525, "head": "5dbe923c726ded1405960ecf5ed924034b8412cf", "scope": "AVX2 upsampling and row color conversion" },
+    { "number": 526, "head": "b5ad1d9cffac891868e9c86b6fe1aa0a56afbcc9", "scope": "AVX2 IDCT and sparse MCU optimization" },
+    { "number": 527, "head": "9c750c4f6e438c2c8a39cf9de43f248b3940567b", "scope": "benchmark reporting" },
+    { "number": 534, "head": "2ace9c7facb843e92edb1251945075e346f294d4", "scope": "final-input scanlines and row padding" }
+  ],
+  "integration_resolutions": [
+    "Apply repeated scaling and color prerequisites once, retaining the current base's equivalent merged color fixes.",
+    "Combine transactional progressive MCU checkpoints with coded-input publication bounds and physical-EOF refill.",
+    "Retain i32 coefficient history for sequential subset and repeated component scans.",
+    "Fuse AVX2 horizontal and vertical upsampling using unrounded vertical sums and native even/odd biases.",
+    "Use PR 526 AVX2 IDCT exactly; adapt lossless conversion to the configured block/row converter.",
+    "Reject reduced-IDCT output for predictive lossless encoding rather than claiming unsupported scaling.",
+    "Keep the lossless backend's four conditioning destinations distinct from the sixteen arithmetic DCT destinations.",
+    "Keep an output-started lifetime guard independent of replay cleanup so completed decodes cannot select reduced IDCT afterward.",
+    "Retain latest chroma goldens instead of reapplying stale color-prerequisite golden refreshes.",
+    "Exercise missing-MCU IDCT suppression with nonzero AC so the regression still detects work after DC-only output is inlined."
+  ]
+}

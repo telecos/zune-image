@@ -55,10 +55,8 @@ unsafe fn upsample_horizontal_filtered<const SHIFT: i32, const EVEN: i16, const 
         };
 
         let v_common = vmulq_s16(v_curr, v_three);
-        let v_even = vshrq_n_s16::<SHIFT>(
-            vaddq_s16(vaddq_s16(v_common, v_prev), v_even_bias));
-        let v_odd = vshrq_n_s16::<SHIFT>(
-            vaddq_s16(vaddq_s16(v_common, v_next), v_odd_bias));
+        let v_even = vshrq_n_s16::<SHIFT>(vaddq_s16(vaddq_s16(v_common, v_prev), v_even_bias));
+        let v_odd = vshrq_n_s16::<SHIFT>(vaddq_s16(vaddq_s16(v_common, v_next), v_odd_bias));
 
         let v_res_1 = vzip1q_s16(v_even, v_odd);
         let v_res_2 = vzip2q_s16(v_even, v_odd);
@@ -138,12 +136,8 @@ unsafe fn upsample_vertical_filtered<const ROUND: bool>(
         let v_common = vmulq_s16(v_in, v_three);
         let top = vaddq_s16(v_common, v_near);
         let bottom = vaddq_s16(v_common, v_far);
-        let v_out_top = if ROUND {
-            vshrq_n_s16::<2>(vaddq_s16(top, v_one))
-        } else { top };
-        let v_out_bottom = if ROUND {
-            vshrq_n_s16::<2>(vaddq_s16(bottom, v_two))
-        } else { bottom };
+        let v_out_top = if ROUND { vshrq_n_s16::<2>(vaddq_s16(top, v_one)) } else { top };
+        let v_out_bottom = if ROUND { vshrq_n_s16::<2>(vaddq_s16(bottom, v_two)) } else { bottom };
 
         // SAFETY: Outputs are 8 * 16 bit long, so the stores are safe.
         unsafe {

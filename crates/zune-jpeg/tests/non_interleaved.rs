@@ -71,7 +71,9 @@ fn decode_non_interleaved_16x16() {
     let test_data = include_bytes!("../../../test-images/jpeg/tiny_non_interleaved_444.jpg");
 
     let mut decoder = JpegDecoder::new(ZCursor::new(test_data));
-    let pixels = decoder.decode().expect("Failed to decode 16x16 non-interleaved JPEG");
+    let pixels = decoder
+        .decode()
+        .expect("Failed to decode 16x16 non-interleaved JPEG");
 
     let info = decoder.info().expect("Failed to get image info");
     assert_eq!(info.width, 16);
@@ -85,7 +87,9 @@ fn decode_non_interleaved_420_64x64() {
     let test_data = include_bytes!("../../../test-images/jpeg/non_interleaved_420_64x64.jpg");
 
     let mut decoder = JpegDecoder::new(ZCursor::new(test_data));
-    let pixels = decoder.decode().expect("Failed to decode 4:2:0 non-interleaved JPEG");
+    let pixels = decoder
+        .decode()
+        .expect("Failed to decode 4:2:0 non-interleaved JPEG");
 
     let info = decoder.info().expect("Failed to get image info");
     assert_eq!(info.width, 64);
@@ -95,7 +99,10 @@ fn decode_non_interleaved_420_64x64() {
     assert_eq!(pixel_digest(&pixels), 0x613ee1f9b28ed265);
 
     // All pixels should have color (no large black regions from failed upsampling)
-    let non_black = pixels.chunks(3).filter(|c| c[0] > 5 || c[1] > 5 || c[2] > 5).count();
+    let non_black = pixels
+        .chunks(3)
+        .filter(|c| c[0] > 5 || c[1] > 5 || c[2] > 5)
+        .count();
     let total_pixels = pixels.len() / 3;
     let non_black_ratio = non_black as f64 / total_pixels as f64;
     assert!(
@@ -111,7 +118,9 @@ fn decode_non_interleaved_422_64x64() {
     let test_data = include_bytes!("../../../test-images/jpeg/non_interleaved_422_64x64.jpg");
 
     let mut decoder = JpegDecoder::new(ZCursor::new(test_data));
-    let pixels = decoder.decode().expect("Failed to decode 4:2:2 non-interleaved JPEG");
+    let pixels = decoder
+        .decode()
+        .expect("Failed to decode 4:2:2 non-interleaved JPEG");
 
     let info = decoder.info().expect("Failed to get image info");
     assert_eq!(info.width, 64);
@@ -125,7 +134,9 @@ fn decode_non_interleaved_440_64x64() {
     let test_data = include_bytes!("../../../test-images/jpeg/non_interleaved_440_64x64.jpg");
 
     let mut decoder = JpegDecoder::new(ZCursor::new(test_data));
-    let pixels = decoder.decode().expect("Failed to decode 4:4:0 non-interleaved JPEG");
+    let pixels = decoder
+        .decode()
+        .expect("Failed to decode 4:4:0 non-interleaved JPEG");
 
     let info = decoder.info().expect("Failed to get image info");
     assert_eq!(info.width, 64);
@@ -154,7 +165,9 @@ fn decode_non_interleaved_422_65x65() {
     let test_data = include_bytes!("../../../test-images/jpeg/non_interleaved_422_65x65.jpg");
 
     let mut decoder = JpegDecoder::new(ZCursor::new(test_data));
-    let pixels = decoder.decode().expect("Failed to decode 4:2:2 non-interleaved JPEG");
+    let pixels = decoder
+        .decode()
+        .expect("Failed to decode 4:2:2 non-interleaved JPEG");
 
     let info = decoder.info().expect("Failed to get image info");
     assert_eq!(info.width, 65);
@@ -164,7 +177,11 @@ fn decode_non_interleaved_422_65x65() {
     // Test image has pattern R=x*3, G=y*3, B=(x+y)*2. Check center pixel (32,32)
     // is approximately (96,96,128) and has not been shifted.
     let idx = (32 * 65 + 32) * 3;
-    let (r, g, b) = (pixels[idx] as i16, pixels[idx + 1] as i16, pixels[idx + 2] as i16);
+    let (r, g, b) = (
+        pixels[idx] as i16,
+        pixels[idx + 1] as i16,
+        pixels[idx + 2] as i16
+    );
     assert!(
         (r - 96).abs() <= 20 && (g - 96).abs() <= 20 && (b - 128).abs() <= 20,
         "Center pixel wrong: expected ~(96,96,128), got ({r},{g},{b})"
@@ -185,7 +202,11 @@ fn decode_baseline_non_interleaved_420_color_balance() {
         .expect("Decoder aborted on 4:2:0 baseline non-interleaved JPEG");
     let info = decoder.info().expect("Failed to get image info");
     let total_pixels = info.width as usize * info.height as usize;
-    assert_eq!(pixels.len(), total_pixels * 3, "Unexpected pixel buffer size");
+    assert_eq!(
+        pixels.len(),
+        total_pixels * 3,
+        "Unexpected pixel buffer size"
+    );
     let mut uninitialized_black_count = 0;
     let mut green_tint_count = 0;
     let mut valid_gray_count = 0;
@@ -201,14 +222,16 @@ fn decode_baseline_non_interleaved_420_color_balance() {
     }
     // 2. Catch current `dev` branch bug (skips odd Luma block rows -> 50% uninitialized black pixels)
     assert_eq!(
-        uninitialized_black_count, 0,
+        uninitialized_black_count,
+        0,
         "Found {} uninitialized black pixels ({:.1}% of image): decoder skipped Luma rows!",
         uninitialized_black_count,
         (uninitialized_black_count as f64 / total_pixels as f64) * 100.0
     );
     // 3. Catch release `0.5.15` bug (Cb over-read -> Cr starvation -> full-frame green tint)
     assert_eq!(
-        green_tint_count, 0,
+        green_tint_count,
+        0,
         "Found {} green-tinted pixels ({:.1}% of image): chroma bitstream starvation occurred!",
         green_tint_count,
         (green_tint_count as f64 / total_pixels as f64) * 100.0
@@ -223,8 +246,7 @@ fn decode_baseline_non_interleaved_420_color_balance() {
 
 #[test]
 fn decode_non_interleaved_with_luma_last() {
-    let test_data =
-        include_bytes!("../../../test-images/jpeg/non_interleaved_luma_last_88x88.jpg");
+    let test_data = include_bytes!("../../../test-images/jpeg/non_interleaved_luma_last_88x88.jpg");
     let mut decoder = JpegDecoder::new(ZCursor::new(test_data));
     let pixels = decoder
         .decode()
@@ -238,13 +260,17 @@ fn read_ahead_marker_does_not_drop_final_scan_row() {
     let test_data =
         include_bytes!("../../../test-images/jpeg/non_interleaved_marker_read_ahead_88x88.jpg");
     let mut decoder = JpegDecoder::new(ZCursor::new(test_data));
-    let pixels = decoder.decode().expect("Failed to decode non-interleaved JPEG");
+    let pixels = decoder
+        .decode()
+        .expect("Failed to decode non-interleaved JPEG");
 
     assert_eq!(pixels.len(), 88 * 88 * 3);
     let bottom_rows = &pixels[(80 * 88 * 3)..];
-    let hash = bottom_rows.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
-        (hash ^ u64::from(*byte)).wrapping_mul(0x100_0000_01b3)
-    });
+    let hash = bottom_rows
+        .iter()
+        .fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(0x100_0000_01b3)
+        });
     assert_eq!(
         hash, 0x65f9_7c0f_ecfc_1d6e,
         "final eight rows differ from the libjpeg-turbo reference"
@@ -321,7 +347,9 @@ fn restart_interval_resets_at_each_non_interleaved_scan() {
     );
 
     let mut decoder = JpegDecoder::new(ZCursor::new(test_data));
-    let pixels = decoder.decode().expect("Failed to decode JPEG with per-scan restarts");
+    let pixels = decoder
+        .decode()
+        .expect("Failed to decode JPEG with per-scan restarts");
     let info = decoder.info().expect("Failed to get image info");
     assert_eq!((info.width, info.height), (333, 257));
     assert_eq!(pixels.len(), 333 * 257 * 3);

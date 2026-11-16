@@ -951,12 +951,15 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                 let start = 64 * (j + i * width_stride);
                 if let Some(dc_pred) = buffer[k].get_mut(start) {
                     if let Err(error) = self.decode_progressive_dc_first(
-                        stream, dc_pred, k, dc_pos, require_real_dc
+                        stream,
+                        dc_pred,
+                        k,
+                        dc_pos,
+                        require_real_dc
                     ) {
                         return Err(self.suspend_progressive_mcu(stream, transaction, i, j, error));
                     }
-                    if self.progressive_fine_checkpoints_enabled::<B>()
-                        && stream.overread_by() > 0
+                    if self.progressive_fine_checkpoints_enabled::<B>() && stream.overread_by() > 0
                     {
                         return Err(self.suspend_progressive_mcu(
                             stream,
@@ -1068,11 +1071,8 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                     let original = transaction.map(|_| *data);
 
                     let ac_table = B::get_ac_table(&mut self.entropy_tables, ac_pos)?;
-                    let decoded = match stream.decode_mcu_ac_first(
-                        &mut self.stream,
-                        ac_table,
-                        data
-                    ) {
+                    let decoded = match stream.decode_mcu_ac_first(&mut self.stream, ac_table, data)
+                    {
                         Ok(decoded) => decoded,
                         Err(error) => {
                             if let Some(original) = original {
@@ -1092,8 +1092,7 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                         // libjpeg's no-op handling for the remaining MCUs.
                         return Ok(());
                     }
-                    if self.progressive_fine_checkpoints_enabled::<B>()
-                        && stream.overread_by() > 0
+                    if self.progressive_fine_checkpoints_enabled::<B>() && stream.overread_by() > 0
                     {
                         if let Some(original) = original {
                             *data = original;
@@ -1241,7 +1240,11 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                             };
 
                             if let Err(error) = self.decode_progressive_dc_first(
-                                stream, data, n, dc_pos, require_real_dc
+                                stream,
+                                data,
+                                n,
+                                dc_pos,
+                                require_real_dc
                             ) {
                                 return Err(self.suspend_progressive_mcu(
                                     stream,
@@ -1265,9 +1268,7 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                         }
                     }
                 }
-                if self.progressive_fine_checkpoints_enabled::<B>()
-                    && stream.overread_by() > 0
-                {
+                if self.progressive_fine_checkpoints_enabled::<B>() && stream.overread_by() > 0 {
                     return Err(self.suspend_progressive_mcu(
                         stream,
                         transaction,

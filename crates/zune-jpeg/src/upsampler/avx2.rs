@@ -35,10 +35,12 @@ unsafe fn upsample_horizontal_filtered<const SHIFT: i32, const EVEN: i16, const 
     let out = unsafe { output.as_mut_ptr().add(2) };
     let store = |previous, current, next, pos: usize| unsafe {
         let common = _mm256_mullo_epi16(current, three);
-        let even = _mm256_srai_epi16::<SHIFT>(
-            _mm256_add_epi16(_mm256_add_epi16(common, previous), even_bias));
-        let odd = _mm256_srai_epi16::<SHIFT>(
-            _mm256_add_epi16(_mm256_add_epi16(common, next), odd_bias));
+        let even = _mm256_srai_epi16::<SHIFT>(_mm256_add_epi16(
+            _mm256_add_epi16(common, previous),
+            even_bias
+        ));
+        let odd =
+            _mm256_srai_epi16::<SHIFT>(_mm256_add_epi16(_mm256_add_epi16(common, next), odd_bias));
         store_interleaved(out.add(pos * 2), even, odd);
     };
     let mut previous = unsafe { _mm256_loadu_si256(ptr.cast()) };
@@ -46,18 +48,27 @@ unsafe fn upsample_horizontal_filtered<const SHIFT: i32, const EVEN: i16, const 
     while pos + 32 <= len {
         let next = unsafe { _mm256_loadu_si256(ptr.add(pos + 16).cast()) };
         let middle = _mm256_permute2x128_si256::<0x21>(previous, next);
-        store(previous, _mm256_alignr_epi8::<2>(middle, previous),
-            _mm256_alignr_epi8::<4>(middle, previous), pos);
+        store(
+            previous,
+            _mm256_alignr_epi8::<2>(middle, previous),
+            _mm256_alignr_epi8::<4>(middle, previous),
+            pos
+        );
         previous = next;
         pos += 16;
     }
     let tail = |pos: usize| unsafe {
-        store(_mm256_loadu_si256(ptr.add(pos).cast()),
+        store(
+            _mm256_loadu_si256(ptr.add(pos).cast()),
             _mm256_loadu_si256(ptr.add(pos + 1).cast()),
-            _mm256_loadu_si256(ptr.add(pos + 2).cast()), pos);
+            _mm256_loadu_si256(ptr.add(pos + 2).cast()),
+            pos
+        );
     };
     let last = len - 18;
-    if pos < last { tail(pos); }
+    if pos < last {
+        tail(pos);
+    }
     tail(last);
     output[0] = (4 * input[0] + EVEN) >> SHIFT;
     output[1] = (3 * input[0] + input[1] + ODD) >> SHIFT;
@@ -71,7 +82,10 @@ unsafe fn store_interleaved(output: *mut i16, even: __m256i, odd: __m256i) {
     let high = _mm256_unpackhi_epi16(even, odd);
     unsafe {
         _mm256_storeu_si256(output.cast(), _mm256_permute2x128_si256::<0x20>(low, high));
-        _mm256_storeu_si256(output.add(16).cast(), _mm256_permute2x128_si256::<0x31>(low, high));
+        _mm256_storeu_si256(
+            output.add(16).cast(),
+            _mm256_permute2x128_si256::<0x31>(low, high)
+        );
     }
 }
 
@@ -103,14 +117,27 @@ unsafe fn upsample_vertical_filtered<const ROUND: bool>(
         let common = _mm256_mullo_epi16(_mm256_loadu_si256(input.as_ptr().add(pos).cast()), three);
         let top_sum = _mm256_add_epi16(common, _mm256_loadu_si256(near.as_ptr().add(pos).cast()));
         let bottom_sum = _mm256_add_epi16(common, _mm256_loadu_si256(far.as_ptr().add(pos).cast()));
-        let top_value = if ROUND { _mm256_srai_epi16::<2>(_mm256_add_epi16(top_sum, one)) } else { top_sum };
-        let bottom_value = if ROUND { _mm256_srai_epi16::<2>(_mm256_add_epi16(bottom_sum, two)) } else { bottom_sum };
+        let top_value = if ROUND {
+            _mm256_srai_epi16::<2>(_mm256_add_epi16(top_sum, one))
+        } else {
+            top_sum
+        };
+        let bottom_value = if ROUND {
+            _mm256_srai_epi16::<2>(_mm256_add_epi16(bottom_sum, two))
+        } else {
+            bottom_sum
+        };
         _mm256_storeu_si256(top_ptr.add(pos).cast(), top_value);
         _mm256_storeu_si256(bottom_ptr.add(pos).cast(), bottom_value);
     };
     let mut pos = 0;
-    while pos + 16 <= len { write(pos); pos += 16; }
-    if pos < len { write(len - 16); }
+    while pos + 16 <= len {
+        write(pos);
+        pos += 16;
+    }
+    if pos < len {
+        write(len - 16);
+    }
 }
 
 #[target_feature(enable = "avx2")]
@@ -141,18 +168,25 @@ pub unsafe fn upsample_hv_avx2(
     let bottom_ptr = bottom.as_mut_ptr();
     let sums = |pos: usize| unsafe {
         let common = _mm256_mullo_epi16(_mm256_loadu_si256(input.as_ptr().add(pos).cast()), three);
-        (_mm256_add_epi16(common, _mm256_loadu_si256(near.as_ptr().add(pos).cast())),
-            _mm256_add_epi16(common, _mm256_loadu_si256(far.as_ptr().add(pos).cast())))
+        (
+            _mm256_add_epi16(common, _mm256_loadu_si256(near.as_ptr().add(pos).cast())),
+            _mm256_add_epi16(common, _mm256_loadu_si256(far.as_ptr().add(pos).cast()))
+        )
     };
     let pack = |out: *mut i16, previous, current, next| unsafe {
         let common = _mm256_mullo_epi16(current, three);
-        let even = _mm256_srai_epi16::<4>(
-            _mm256_add_epi16(_mm256_add_epi16(common, previous), even_bias));
-        let odd = _mm256_srai_epi16::<4>(
-            _mm256_add_epi16(_mm256_add_epi16(common, next), odd_bias));
+        let even = _mm256_srai_epi16::<4>(_mm256_add_epi16(
+            _mm256_add_epi16(common, previous),
+            even_bias
+        ));
+        let odd =
+            _mm256_srai_epi16::<4>(_mm256_add_epi16(_mm256_add_epi16(common, next), odd_bias));
         store_interleaved(out, even, odd);
     };
-    let write = |pos: usize, previous: (__m256i, __m256i), current: (__m256i, __m256i), next: (__m256i, __m256i)| unsafe {
+    let write = |pos: usize,
+                 previous: (__m256i, __m256i),
+                 current: (__m256i, __m256i),
+                 next: (__m256i, __m256i)| unsafe {
         pack(top_ptr.add(2 + pos * 2), previous.0, current.0, next.0);
         pack(bottom_ptr.add(2 + pos * 2), previous.1, current.1, next.1);
     };
@@ -162,14 +196,25 @@ pub unsafe fn upsample_hv_avx2(
         let next = sums(pos + 16);
         let mid_top = _mm256_permute2x128_si256::<0x21>(previous.0, next.0);
         let mid_bottom = _mm256_permute2x128_si256::<0x21>(previous.1, next.1);
-        write(pos, previous,
-            (_mm256_alignr_epi8::<2>(mid_top, previous.0), _mm256_alignr_epi8::<2>(mid_bottom, previous.1)),
-            (_mm256_alignr_epi8::<4>(mid_top, previous.0), _mm256_alignr_epi8::<4>(mid_bottom, previous.1)));
+        write(
+            pos,
+            previous,
+            (
+                _mm256_alignr_epi8::<2>(mid_top, previous.0),
+                _mm256_alignr_epi8::<2>(mid_bottom, previous.1)
+            ),
+            (
+                _mm256_alignr_epi8::<4>(mid_top, previous.0),
+                _mm256_alignr_epi8::<4>(mid_bottom, previous.1)
+            )
+        );
         previous = next;
         pos += 16;
     }
     let last = len - 18;
-    if pos < last { write(pos, sums(pos), sums(pos + 1), sums(pos + 2)); }
+    if pos < last {
+        write(pos, sums(pos), sums(pos + 1), sums(pos + 2));
+    }
     write(last, sums(last), sums(last + 1), sums(last + 2));
     for (other, row) in [(near, top), (far, bottom)] {
         let first = 3 * input[0] + other[0];
@@ -190,16 +235,26 @@ mod tests {
 
     #[test]
     fn sliding_windows_and_fused_hv_match_scalar() {
-        if !is_x86_feature_detected!("avx2") { return; }
+        if !is_x86_feature_detected!("avx2") {
+            return;
+        }
         for len in (3..=160).chain([256, 1280]) {
             for pattern in 0..4 {
                 let row = |seed| -> Vec<i16> {
-                    (0..len).map(|x| match pattern {
-                        0 => 0,
-                        1 => 255,
-                        2 => if (x + seed) % 2 == 0 { 0 } else { 255 },
-                        _ => ((x * 79 + seed * 53) % 256) as i16
-                    }).collect()
+                    (0..len)
+                        .map(|x| match pattern {
+                            0 => 0,
+                            1 => 255,
+                            2 => {
+                                if (x + seed) % 2 == 0 {
+                                    0
+                                } else {
+                                    255
+                                }
+                            }
+                            _ => ((x * 79 + seed * 53) % 256) as i16
+                        })
+                        .collect()
                 };
                 let input = row(0);
                 let near = row(1);
@@ -214,11 +269,23 @@ mod tests {
                     unsafe {
                         match kind {
                             0 => {
-                                scalar::upsample_horizontal(&input, &near, &far, &mut scratch, reference);
+                                scalar::upsample_horizontal(
+                                    &input,
+                                    &near,
+                                    &far,
+                                    &mut scratch,
+                                    reference
+                                );
                                 upsample_horizontal_avx2(&input, &near, &far, &mut [], out);
                             }
                             1 => {
-                                scalar::upsample_vertical(&input, &near, &far, &mut scratch, reference);
+                                scalar::upsample_vertical(
+                                    &input,
+                                    &near,
+                                    &far,
+                                    &mut scratch,
+                                    reference
+                                );
                                 upsample_vertical_avx2(&input, &near, &far, &mut [], out);
                             }
                             _ => {
@@ -231,7 +298,10 @@ mod tests {
                             }
                         }
                     }
-                    assert_eq!(actual, expected, "len {len}, pattern {pattern}, kind {kind}");
+                    assert_eq!(
+                        actual, expected,
+                        "len {len}, pattern {pattern}, kind {kind}"
+                    );
                 }
             }
         }

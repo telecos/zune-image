@@ -78,6 +78,11 @@ pub struct ScaledJpegDecoder<T> {
 impl<T: ZByteReaderTrait> ScaledJpegDecoder<T> {
     pub(crate) fn new(mut decoder: JpegDecoder<T>, scale: JpegScale) -> Result<Self, DecodeErrors> {
         decoder.decode_headers()?;
+        if decoder.info.sof.is_lossless() {
+            return Err(DecodeErrors::FormatStatic(
+                "Lossless JPEG does not support reduced-IDCT output"
+            ));
+        }
         let output = ScaledOutput::new(&decoder, scale)?;
         Ok(Self {
             decoder,

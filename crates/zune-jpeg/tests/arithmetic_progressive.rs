@@ -200,16 +200,27 @@ fn arithmetic_conditioning_table_fifteen_decodes() {
         .windows(2)
         .position(|bytes| bytes == [0xFF, 0xDA])
         .expect("fixture must contain an SOS marker");
-    assert_eq!(table_fifteen[sos + 4], 3, "fixture must have three scan components");
-    assert_eq!(table_fifteen[sos + 5], 1, "first scan component must have ID 1");
-    assert_eq!(table_fifteen[sos + 6], 0, "component 1 must initially use table 0");
+    assert_eq!(
+        table_fifteen[sos + 4],
+        3,
+        "fixture must have three scan components"
+    );
+    assert_eq!(
+        table_fifteen[sos + 5],
+        1,
+        "first scan component must have ID 1"
+    );
+    assert_eq!(
+        table_fifteen[sos + 6],
+        0,
+        "component 1 must initially use table 0"
+    );
     table_fifteen[sos + 6] = 0xFF;
 
     assert_eq!(decode(&table_fifteen, true), expected);
 
-    let progressive = include_bytes!(
-        "../../../test-images/jpeg/arith/progressive_parity/arith_spectral_all.jpg"
-    );
+    let progressive =
+        include_bytes!("../../../test-images/jpeg/arith/progressive_parity/arith_spectral_all.jpg");
     let expected = decode(progressive, true);
     let mut table_fifteen = progressive.to_vec();
     let sos_offsets: Vec<_> = table_fifteen
@@ -217,10 +228,22 @@ fn arithmetic_conditioning_table_fifteen_decodes() {
         .enumerate()
         .filter_map(|(offset, bytes)| (bytes == [0xFF, 0xDA]).then_some(offset))
         .collect();
-    assert_eq!(sos_offsets.len(), 64, "fixture must contain 64 progressive scans");
+    assert_eq!(
+        sos_offsets.len(),
+        64,
+        "fixture must contain 64 progressive scans"
+    );
     for sos in sos_offsets {
-        assert_eq!(table_fifteen[sos + 4], 1, "fixture scans must have one component");
-        assert_eq!(table_fifteen[sos + 6], 0, "fixture scans must initially use table 0");
+        assert_eq!(
+            table_fifteen[sos + 4],
+            1,
+            "fixture scans must have one component"
+        );
+        assert_eq!(
+            table_fifteen[sos + 6],
+            0,
+            "fixture scans must initially use table 0"
+        );
         table_fifteen[sos + 6] = 0xFF;
     }
     assert_eq!(decode(&table_fifteen, true), expected);

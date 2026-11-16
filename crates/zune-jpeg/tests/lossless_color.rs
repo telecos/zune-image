@@ -370,7 +370,10 @@ fn arithmetic_invalid_conditioning_markers_and_truncation_are_errors() {
         data[at] = value;
         let mut decoder = JpegDecoder::new(ZCursor::new(data));
         let mut output = [0xa5; 45];
-        assert!(decoder.decode_into(&mut output).is_err());
+        assert!(
+            decoder.decode_into(&mut output).is_err(),
+            "offset {at}, value {value:#x}"
+        );
         assert_eq!(output, [0xa5; 45]);
     }
     for source in [

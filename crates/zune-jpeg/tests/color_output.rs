@@ -16,38 +16,38 @@ const FIXTURES: [(&str, &[u8], (usize, usize)); 7] = [
     (
         "baseline 4:4:4",
         include_bytes!("../../../test-images/jpeg/tiny_non_interleaved_444.jpg"),
-        (16, 16),
+        (16, 16)
     ),
     (
         "baseline 4:2:2",
         include_bytes!("../../../test-images/jpeg/non_interleaved_422_64x64.jpg"),
-        (64, 64),
+        (64, 64)
     ),
     (
         "baseline 4:2:0",
         include_bytes!("../../../test-images/jpeg/non_interleaved_420_64x64.jpg"),
-        (64, 64),
+        (64, 64)
     ),
     (
         "baseline odd-width SIMD tail",
         include_bytes!("../../../test-images/jpeg/non_interleaved_422_65x65.jpg"),
-        (65, 65),
+        (65, 65)
     ),
     (
         "progressive 4:4:4 SIMD tail",
         include_bytes!("../../../test-images/jpeg/progressive_dc_huffman_table_1.jpg"),
-        (650, 470),
+        (650, 470)
     ),
     (
         "progressive 4:2:0",
         include_bytes!("../../../test-images/jpeg/progressive_restart_420.jpg"),
-        (256, 256),
+        (256, 256)
     ),
     (
         "progressive odd-width SIMD tail",
         include_bytes!("../../../test-images/jpeg/synthetic_image.jpg"),
-        (533, 800),
-    ),
+        (533, 800)
+    )
 ];
 
 fn decode(data: &[u8], colorspace: ColorSpace) -> (Vec<u8>, (usize, usize)) {
@@ -206,12 +206,20 @@ fn generic_upsampling_preserves_delayed_boundary_rows() {
         .map(|(actual, reference)| actual.abs_diff(*reference))
         .collect();
     let max_difference = differences.iter().copied().max().unwrap_or(0);
-    let mean_difference =
-        differences.iter().map(|difference| f64::from(*difference)).sum::<f64>()
-            / differences.len() as f64;
+    let mean_difference = differences
+        .iter()
+        .map(|difference| f64::from(*difference))
+        .sum::<f64>()
+        / differences.len() as f64;
 
-    assert!(max_difference <= 8, "max channel difference {max_difference}");
-    assert!(mean_difference < 3.0, "mean channel difference {mean_difference}");
+    assert!(
+        max_difference <= 8,
+        "max channel difference {max_difference}"
+    );
+    assert!(
+        mean_difference < 3.0,
+        "mean channel difference {mean_difference}"
+    );
 
     let row_bytes = 40 * 3;
     let delayed_rows = &differences[14 * row_bytes..16 * row_bytes];

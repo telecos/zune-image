@@ -347,6 +347,8 @@ pub struct JpegDecoder<T> {
     pub(crate) input_colorspace: ColorSpace,
     /// Adobe APP14 transform, resolved with the SOF component count at SOS.
     pub(crate) adobe_transform:  Option<u8>,
+    input_colorspace_override:   Option<ColorSpace>,
+    output_started:              bool,
     // Is the image using arithmetic coding?
     pub(crate) is_arithmetic:    bool,
     // Progressive image details
@@ -430,7 +432,7 @@ pub struct JpegDecoder<T> {
     /// Storage is retained across EOF or cancellation so retries can reuse its
     /// capacity. Huffman scans also keep completed MCU transactions so a later
     /// retry can resume from a fine checkpoint without exposing partial data.
-    pub(crate) progressive_scan_buffer: [Vec<i16>; MAX_COMPONENTS],
+    pub(crate) progressive_scan_buffer:          [Vec<i16>; MAX_COMPONENTS],
     /// Reusable baseline upsampling scratch retained across pull calls.
     pub(crate) upsampler_scratch:                Vec<i16>,
     /// Number of progressive scans committed into `progressive_mcus_buffer`.
@@ -1150,7 +1152,8 @@ where
             McuDecodeOutput::Scanlines(sink) => {
                 (sink.rows_written, sink.source_complete, sink.pixels)
             }
-            McuDecodeOutput::Pixels(_) | McuDecodeOutput::RawPlanes(_)
+            McuDecodeOutput::Pixels(_)
+            | McuDecodeOutput::RawPlanes(_)
             | McuDecodeOutput::Scaled(_) => unreachable!()
         };
         if let Err(error) = decode_result {
@@ -2234,9 +2237,11 @@ where
                 dc_huffman:                              [None, None, None, None],
                 ac_huffman:                              [None, None, None, None],
                 #[cfg(feature = "arith")]
-                dc_arithmetic: [ArithDCTables::default(); MAX_ARITHMETIC_TABLES],
+                dc_arithmetic:                           [ArithDCTables::default();
+                    MAX_ARITHMETIC_TABLES],
                 #[cfg(feature = "arith")]
-                ac_arithmetic: [ArithACTables::default(); MAX_ARITHMETIC_TABLES]
+                ac_arithmetic:                           [ArithACTables::default();
+                    MAX_ARITHMETIC_TABLES]
             },
             components:                       vec![],
             // Interleaved information
@@ -2261,6 +2266,8 @@ where
             color_convert_16:                 color_convert,
             input_colorspace:                 ColorSpace::YCbCr,
             adobe_transform:                  None,
+            input_colorspace_override:        None,
+            output_started:                   false,
             z_order:                          [0; MAX_COMPONENTS],
             restart_interval:                 0,
             todo:                             0x7fff_ffff,
@@ -2816,6 +2823,54 @@ where
     pub fn input_colorspace(&self) -> Option<ColorSpace> {
         return if self.headers_decoded { Some(self.input_colorspace) } else { None };
     }
+
+    /// Return the Adobe APP14 transform after headers have been decoded.
+    ///
+    /// `None` means no Adobe marker was found, or headers are not complete.
+    #[must_use]
+    pub fn adobe_transform(&self) -> Option<u8> {
+        if self.headers_decoded {
+            self.adobe_transform
+        } else {
+            None
+        }
+    }
+
+    /// Override interpretation of three-component samples as RGB or YCbCr.
+    ///
+    /// Unlike `jpeg_set_out_colorspace`, this changes the meaning of source
+    /// samples. Set or clear it before starting any output operation. Container
+    /// integrations are responsible for deciding whether their override should
+    /// take precedence over Adobe APP14 or other embedded metadata.
+    ///
+    /// Other color spaces and non-three-component images are rejected.
+    pub fn set_input_colorspace_override(
+        &mut self, colorspace: Option<ColorSpace>
+    ) -> Result<(), DecodeErrors> {
+        if self.output_started {
+            return Err(DecodeErrors::FormatStatic(
+                "select input colorspace before starting scan decoding"
+            ));
+        }
+        if colorspace.is_some_and(|color| !matches!(color, ColorSpace::RGB | ColorSpace::YCbCr)) {
+            return Err(DecodeErrors::FormatStatic(
+                "input colorspace override requires RGB or YCbCr"
+            ));
+        }
+        if self.headers_decoded && colorspace.is_some() && self.components.len() != 3 {
+            return Err(DecodeErrors::FormatStatic(
+                "input colorspace override requires three components"
+            ));
+        }
+        self.input_colorspace_override = colorspace;
+        if self.headers_decoded {
+            self.resolve_input_colorspace()?;
+            if let Some(state) = self.scan_state.as_deref_mut() {
+                state.header_snapshot.input_colorspace = self.input_colorspace;
+            }
+        }
+        Ok(())
+    }
     /// Set decoder options
     ///
     /// This can be used after initialization or a partial decode. Active raw
@@ -3115,6 +3170,15 @@ where
     }
 
     fn resolve_input_colorspace(&mut self) -> Result<(), DecodeErrors> {
+        if let Some(colorspace) = self.input_colorspace_override {
+            if self.components.len() != 3 {
+                return Err(DecodeErrors::FormatStatic(
+                    "input colorspace override requires three components"
+                ));
+            }
+            self.input_colorspace = colorspace;
+            return Ok(());
+        }
         self.input_colorspace = match self.adobe_transform {
             Some(0) if self.components.len() == 1 => ColorSpace::Luma,
             Some(0) if self.components.len() == 3 => ColorSpace::RGB,
@@ -3581,6 +3645,7 @@ where
     ///
     #[allow(clippy::too_many_lines)]
     pub(crate) fn prepare_for_scan_decode(&mut self) -> Result<(), DecodeErrors> {
+        self.output_started = true;
         // Pull the scan-resume state out into owned locals so the restore
         // below can freely mutate `self`. When headers haven't completed
         // yet, `scan_plan` is `None` and we just run header decoding below.
@@ -3732,9 +3797,10 @@ where
             let had_progressive_view =
                 progressive_view.is_some() || progressive_fine_view.is_some();
             if let Some(view) = progressive_fine_view {
-                let header_snapshot = progressive_view
-                    .as_ref()
-                    .map_or_else(|| outer_header_snapshot.as_ref().unwrap(), |view| &view.header_snapshot);
+                let header_snapshot = progressive_view.as_ref().map_or_else(
+                    || outer_header_snapshot.as_ref().unwrap(),
+                    |view| &view.header_snapshot
+                );
                 self.restore_scan_header_state(header_snapshot);
                 self.stream.set_position(view.stream_position)?;
                 self.progressive_completed_scans = view.completed_scans;
@@ -3903,7 +3969,7 @@ where
     pub fn into_scaled(
         self, scale: crate::JpegScale
     ) -> Result<crate::ScaledJpegDecoder<T>, DecodeErrors> {
-        if self.scan_decode_attempted {
+        if self.output_started {
             return Err(DecodeErrors::FormatStatic(
                 "select output scaling before starting scan decoding"
             ));
@@ -4465,9 +4531,9 @@ mod extended_xmp_tests {
 
 #[cfg(test)]
 mod planar_layout_helpers {
+    use alloc::sync::Arc;
     use alloc::vec;
     use alloc::vec::Vec;
-    use alloc::sync::Arc;
     use core::sync::atomic::{AtomicBool, Ordering};
 
     use zune_core::bytestream::ZCursor;

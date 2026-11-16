@@ -51,16 +51,55 @@ fn assert_twelve_bit_size(sof_marker: u8) {
 
 fn lossless_header(precision: u8, sampling: u8, quantization_table: u8) -> Vec<u8> {
     vec![
-        0xFF, 0xD8, // SOI
-        0xFF, 0xC4, 0x00, 0x14, // DHT, one DC symbol
+        0xFF,
+        0xD8, // SOI
+        0xFF,
+        0xC4,
+        0x00,
+        0x14, // DHT, one DC symbol
         0x00, // DC table 0
-        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // code counts 1-8
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // code counts 9-16
+        0x01,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00, // code counts 1-8
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00, // code counts 9-16
         0x10, // lossless difference category 16
-        0xFF, 0xC3, 0x00, 0x0B, precision, 0x00, 0x20, 0x00, 0x20, 0x01,
-        0x01, sampling, quantization_table, // component
-        0xFF, 0xDA, 0x00, 0x08, 0x01, 0x01, 0x00, 0x01, 0x00, 0x00, // SOS
-        0xFF, 0xD9 // EOI
+        0xFF,
+        0xC3,
+        0x00,
+        0x0B,
+        precision,
+        0x00,
+        0x20,
+        0x00,
+        0x20,
+        0x01,
+        0x01,
+        sampling,
+        quantization_table, // component
+        0xFF,
+        0xDA,
+        0x00,
+        0x08,
+        0x01,
+        0x01,
+        0x00,
+        0x01,
+        0x00,
+        0x00, // SOS
+        0xFF,
+        0xD9, // EOI
     ]
 }
 
@@ -77,7 +116,9 @@ fn lossless_arithmetic_header(component_count: u8, interleaved: bool) -> Vec<u8>
     let scans: Vec<Vec<u8>> = if interleaved {
         vec![(1..=component_count).collect()]
     } else {
-        (1..=component_count).map(|component| vec![component]).collect()
+        (1..=component_count)
+            .map(|component| vec![component])
+            .collect()
     };
     for scan in scans {
         data.extend_from_slice(&[0xFF, 0xDA]);
@@ -144,7 +185,9 @@ fn lossless_arithmetic_headers_expose_dimensions() {
 
         let mut unsupported = data.clone();
         unsupported[6] = 12;
-        let error = JpegDecoder::new(ZCursor::new(&unsupported)).decode().unwrap_err();
+        let error = JpegDecoder::new(ZCursor::new(&unsupported))
+            .decode()
+            .unwrap_err();
         assert!(matches!(
             error,
             DecodeErrors::Unsupported(UnsupportedSchemes::LosslessArithmetic)
@@ -155,7 +198,10 @@ fn lossless_arithmetic_headers_expose_dimensions() {
 #[test]
 fn lossless_only_huffman_categories_stay_rejected_for_lossy_frames() {
     let mut data = lossless_header(8, 0x11, 0);
-    let sof = data.windows(2).position(|bytes| bytes == [0xFF, 0xC3]).unwrap();
+    let sof = data
+        .windows(2)
+        .position(|bytes| bytes == [0xFF, 0xC3])
+        .unwrap();
     data[sof + 1] = 0xC0;
 
     let error = JpegDecoder::new(ZCursor::new(&data))
@@ -167,12 +213,11 @@ fn lossless_only_huffman_categories_stay_rejected_for_lossy_frames() {
 #[test]
 fn iptc_metadata() {
     const EXPECTED_DATA: &[u8] = &[
-        56, 66, 73, 77, 4, 4, 0, 0, 0, 0, 0, 99, 28, 2, 90, 0, 8, 66, 117, 100, 97, 112, 101,
-        115, 116, 28, 2, 101, 0, 7, 72, 117, 110, 103, 97, 114, 121, 28, 2, 25, 0, 3, 72, 118, 75,
-        28, 2, 25, 0, 4, 50, 48, 48, 54, 28, 2, 25, 0, 6, 115, 117, 109, 109, 101, 114, 28, 2, 25,
-        0, 4, 74, 117, 108, 121, 28, 2, 25, 0, 7, 104, 111, 108, 105, 100, 97, 121, 28, 2, 25, 0,
-        7, 72, 117, 110, 103, 97, 114, 121, 28, 2, 25, 0, 8, 66, 117, 100, 97, 112, 101, 115, 116,
-        0,
+        56, 66, 73, 77, 4, 4, 0, 0, 0, 0, 0, 99, 28, 2, 90, 0, 8, 66, 117, 100, 97, 112, 101, 115,
+        116, 28, 2, 101, 0, 7, 72, 117, 110, 103, 97, 114, 121, 28, 2, 25, 0, 3, 72, 118, 75, 28,
+        2, 25, 0, 4, 50, 48, 48, 54, 28, 2, 25, 0, 6, 115, 117, 109, 109, 101, 114, 28, 2, 25, 0,
+        4, 74, 117, 108, 121, 28, 2, 25, 0, 7, 104, 111, 108, 105, 100, 97, 121, 28, 2, 25, 0, 7,
+        72, 117, 110, 103, 97, 114, 121, 28, 2, 25, 0, 8, 66, 117, 100, 97, 112, 101, 115, 116, 0
     ];
     let image: &[u8] = include_bytes!("images/iptc.jpeg");
 
@@ -206,20 +251,20 @@ fn test_sample_ratios() {
     let images = [
         (
             include_bytes!("../../../test-images/jpeg/non_interleaved_444_64x64.jpg").as_slice(),
-            SampleRatios::None,
+            SampleRatios::None
         ),
         (
             include_bytes!("../../../test-images/jpeg/non_interleaved_420_64x64.jpg").as_slice(),
-            SampleRatios::HV,
+            SampleRatios::HV
         ),
         (
             include_bytes!("../../../test-images/jpeg/non_interleaved_422_64x64.jpg").as_slice(),
-            SampleRatios::H,
+            SampleRatios::H
         ),
         (
             include_bytes!("../../../test-images/jpeg/non_interleaved_440_64x64.jpg").as_slice(),
-            SampleRatios::V,
-        ),
+            SampleRatios::V
+        )
     ];
 
     for (data, expected) in images {
@@ -270,9 +315,9 @@ fn extended_huffman_8_bit_decode_remains_supported() {
         .expect("SOF0 fixture should decode");
 
     let mut decoder = JpegDecoder::new(ZCursor::new(&extended));
-        decoder
-            .decode_headers()
-            .expect("8-bit SOF1 headers should parse");
+    decoder
+        .decode_headers()
+        .expect("8-bit SOF1 headers should parse");
 
     let actual = decoder.decode().expect("8-bit SOF1 pixels should decode");
     assert_eq!(actual, expected);

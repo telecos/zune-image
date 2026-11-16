@@ -663,7 +663,7 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                                             width,
                                             padded_width,
                                             &mut stripe_written,
-                                            upsampler_scratch_space,
+                                            upsampler_scratch_space
                                         )?;
                                         scanlines.rows_written = stripe_written / scanlines.stride;
                                     }
@@ -723,8 +723,9 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                 // Neither a pull request nor the stable packed prefix may
                 // publish a row assembled after exhausting growing input.
                 if stream.overread_by() > 0
-                    && (self.scan_eof_is_error() ||
-                        (output.requested_output_stripe().is_some() && !self.scanline_input_complete()))
+                    && (self.scan_eof_is_error()
+                        || (output.requested_output_stripe().is_some()
+                            && !self.scanline_input_complete()))
                 {
                     return Err(DecodeErrors::ExhaustedData);
                 }
@@ -840,13 +841,15 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
 
                 match terminate {
                     McuContinuation::Ok => {
-                        if all_components_in_first_scan && !self.is_interleaved
-                            && !self.dnl_image && stream.remaining_mcus_are_neutral()
+                        if all_components_in_first_scan
+                            && !self.is_interleaved
+                            && !self.dnl_image
+                            && stream.remaining_mcus_are_neutral()
                         {
                             if let McuDecodeOutput::Pixels(pixels) = output {
                                 self.fill_neutral_tail(pixels, &mut pixels_written, &mut cancel)?;
                                 self.mark_baseline_scan_components_complete(
-                                    &scan_components[..scan_component_count],
+                                    &scan_components[..scan_component_count]
                                 );
                                 return Ok(());
                             }
@@ -1392,8 +1395,10 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
         };
 
         for j in start_col..scan_du_width {
-            let native_fast_window = PROGRESSIVE && !self.baseline_corrupt
-                && self.restart_interval == 0 && stream.marker().is_none()
+            let native_fast_window = PROGRESSIVE
+                && !self.baseline_corrupt
+                && self.restart_interval == 0
+                && stream.marker().is_none()
                 && self.native_fast_huffman_window(blocks_in_mcu)?;
             stream.begin_mcu();
             if !PROGRESSIVE && !self.dnl_image && stream.remaining_mcus_are_neutral() {
@@ -1402,11 +1407,14 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                     if !component.needed {
                         continue;
                     }
-                    let first = j.checked_mul(component.horizontal_sample)
+                    let first = j
+                        .checked_mul(component.horizontal_sample)
                         .and_then(|column| column.checked_mul(8))
                         .ok_or(DecodeErrors::FormatStatic("Missing MCU position overflow"))?;
                     for row in component.raw_coeff.chunks_exact_mut(component.width_stride) {
-                        row.get_mut(first..).ok_or(DecodeErrors::FormatStatic("Invalid missing MCU geometry"))?.fill(128);
+                        row.get_mut(first..)
+                            .ok_or(DecodeErrors::FormatStatic("Invalid missing MCU geometry"))?
+                            .fill(128);
                     }
                 }
                 break;
@@ -1555,7 +1563,9 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                             if len <= 1 {
                                 let coeff = ((tmp[0].wrapping_add(1028)) >> 3).clamp(0, 255) as i16;
                                 let row_val = [coeff; 8];
-                                assert!(stride >= 8 && stride <= idct_pos.len().saturating_sub(8) / 7);
+                                assert!(
+                                    stride >= 8 && stride <= idct_pos.len().saturating_sub(8) / 7
+                                );
                                 for row in 0..8 {
                                     let offset = row * stride;
                                     idct_pos[offset..offset + 8].copy_from_slice(&row_val);
@@ -1639,7 +1649,10 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                 break;
             }
 
-            if B::marker_ends_data() && matches!(stream.marker(), Some(Marker::DNL)) && stream.bits_left() == 0 {
+            if B::marker_ends_data()
+                && matches!(stream.marker(), Some(Marker::DNL))
+                && stream.bits_left() == 0
+            {
                 if j + 1 < mcu_width {
                     return Err(DecodeErrors::FormatStatic(
                         "DNL marker found before the end of an MCU row"

@@ -99,7 +99,10 @@ pub(crate) fn choose_ycbcr_to_rgb_convert_func(
                 ColorSpace::BGRA => (ycbcr_to_bgra_avx2, ycbcr_to_rgba_row_avx2::<true>),
                 _ => return None
             };
-            return Some(ColorConvert16 { block, row: Some(row) });
+            return Some(ColorConvert16 {
+                block,
+                row: Some(row)
+            });
         }
     }
     #[cfg(all(feature = "neon", target_arch = "aarch64"))]
@@ -119,10 +122,18 @@ pub(crate) fn choose_ycbcr_to_rgb_convert_func(
     }
     // when there is no x86 or we haven't returned by here, resort to scalar
     return match type_need {
-        ColorSpace::RGB => Some(ColorConvert16::block_only(scalar::ycbcr_to_rgb_inner_16_scalar::<false>)),
-        ColorSpace::RGBA => Some(ColorConvert16::block_only(scalar::ycbcr_to_rgba_inner_16_scalar::<false>)),
-        ColorSpace::BGRA => Some(ColorConvert16::block_only(scalar::ycbcr_to_rgba_inner_16_scalar::<true>)),
-        ColorSpace::BGR => Some(ColorConvert16::block_only(scalar::ycbcr_to_rgb_inner_16_scalar::<true>)),
+        ColorSpace::RGB => Some(ColorConvert16::block_only(
+            scalar::ycbcr_to_rgb_inner_16_scalar::<false>
+        )),
+        ColorSpace::RGBA => Some(ColorConvert16::block_only(
+            scalar::ycbcr_to_rgba_inner_16_scalar::<false>
+        )),
+        ColorSpace::BGRA => Some(ColorConvert16::block_only(
+            scalar::ycbcr_to_rgba_inner_16_scalar::<true>
+        )),
+        ColorSpace::BGR => Some(ColorConvert16::block_only(
+            scalar::ycbcr_to_rgb_inner_16_scalar::<true>
+        )),
         _ => None
     };
 }
@@ -153,7 +164,9 @@ mod tests {
                 _ => unreachable!()
             };
             let channels = format.num_components();
-            let dispatched = choose_ycbcr_to_rgb_convert_func(format, &options).unwrap().block;
+            let dispatched = choose_ycbcr_to_rgb_convert_func(format, &options)
+                .unwrap()
+                .block;
             for convert in [scalar, dispatched] {
                 assert_converter_matches_scalar(convert, scalar, channels * 16, channels == 4);
                 for cb in 0_i16..=255 {
@@ -281,13 +294,17 @@ mod tests {
         let options = DecoderOptions::default();
         assert!(options.use_avx2());
         assert_converter_matches_scalar(
-            choose_ycbcr_to_rgb_convert_func(ColorSpace::BGR, &options).unwrap().block,
+            choose_ycbcr_to_rgb_convert_func(ColorSpace::BGR, &options)
+                .unwrap()
+                .block,
             ycbcr_to_rgb_inner_16_scalar::<true>,
             48,
             false
         );
         assert_converter_matches_scalar(
-            choose_ycbcr_to_rgb_convert_func(ColorSpace::BGRA, &options).unwrap().block,
+            choose_ycbcr_to_rgb_convert_func(ColorSpace::BGRA, &options)
+                .unwrap()
+                .block,
             ycbcr_to_rgba_inner_16_scalar::<true>,
             64,
             true
@@ -315,13 +332,17 @@ mod tests {
         let options = DecoderOptions::default();
         assert!(options.use_neon());
         assert_converter_matches_scalar(
-            choose_ycbcr_to_rgb_convert_func(ColorSpace::BGR, &options).unwrap().block,
+            choose_ycbcr_to_rgb_convert_func(ColorSpace::BGR, &options)
+                .unwrap()
+                .block,
             ycbcr_to_rgb_inner_16_scalar::<true>,
             48,
             false
         );
         assert_converter_matches_scalar(
-            choose_ycbcr_to_rgb_convert_func(ColorSpace::BGRA, &options).unwrap().block,
+            choose_ycbcr_to_rgb_convert_func(ColorSpace::BGRA, &options)
+                .unwrap()
+                .block,
             ycbcr_to_rgba_inner_16_scalar::<true>,
             64,
             true
