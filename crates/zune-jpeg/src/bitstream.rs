@@ -117,6 +117,7 @@ pub(crate) struct HuffmanBitstreamState {
     pub(crate) buffer:                  u64,
     pub(crate) aligned_buffer:          u64,
     pub(crate) bits_left:               u8,
+    pub(crate) reader_position:         usize,
     pub(crate) marker:                  Option<Marker>,
     pub(crate) marker_bits:             Option<u8>,
     pub(crate) marker_padding_consumed: bool,
@@ -265,6 +266,14 @@ pub(crate) trait BitStream {
     /// `bits_left()` is a byte shift counter that is 0 between any two bytes.
     fn marker_ends_data() -> bool;
 
+    /// Absolute source position corresponding to the buffered entropy state.
+    fn checkpoint_position(&self) -> Option<usize> {
+        None
+    }
+
+    /// Initialize the entropy source position at a scan or restart boundary.
+    fn set_checkpoint_position(&mut self, _position: usize) {}
+
     /// Whether this bitstream type supports per-MCU checkpoint/restore.
     /// Huffman coding supports it; arithmetic coding does not (the A/C/CT
     /// registers are coupled to statistical context tables).
@@ -297,6 +306,8 @@ pub(crate) struct BitStreamHuffman {
     aligned_buffer:      u64,
     /// Tell us the bits left the two buffer
     bits_left:           u8,
+    /// Absolute reader position after bytes prefetched into the bit buffer.
+    reader_position:     usize,
     /// Did we find a marker(RST/EOF) during decoding?
     marker:              Option<Marker>,
     marker_bits:         Option<u8>,
@@ -474,6 +485,7 @@ impl BitStreamHuffman {
         };
         let past_end = reader.eof()?;
         let byte = read_byte(reader)?;
+        self.reader_position += 1;
         self.overread_by += usize::from(reader.eof()?);
         self.zeros_past_end += 8 * usize::from(past_end);
         self.buffer = (self.buffer << 8) | byte;
@@ -481,10 +493,12 @@ impl BitStreamHuffman {
         if byte == 0xff {
             let stuffed_past_end = reader.eof()?;
             let mut next_byte = read_byte(reader)?;
+            self.reader_position += 1;
             self.stuffed_past_end |= stuffed_past_end;
             while next_byte == 0xff {
                 let more_past_end = reader.eof()?;
                 next_byte = read_byte(reader)?;
+                self.reader_position += 1;
                 self.stuffed_past_end |= more_past_end;
             }
             if next_byte == 0 {
@@ -679,6 +693,7 @@ impl BitStream for BitStreamHuffman {
             buffer:              0,
             aligned_buffer:      0,
             bits_left:           0,
+            reader_position:     0,
             marker:              None,
             marker_bits:         None,
             marker_padding_consumed: false,
@@ -706,6 +721,7 @@ impl BitStream for BitStreamHuffman {
             buffer:              0,
             aligned_buffer:      0,
             bits_left:           0,
+            reader_position:     0,
             marker:              None,
             marker_bits:         None,
             marker_padding_consumed: false,
@@ -778,6 +794,16 @@ impl BitStream for BitStreamHuffman {
     }
 
     #[inline(always)]
+    fn checkpoint_position(&self) -> Option<usize> {
+        Some(self.reader_position)
+    }
+
+    #[inline(always)]
+    fn set_checkpoint_position(&mut self, position: usize) {
+        self.reader_position = position;
+    }
+
+    #[inline(always)]
     fn supports_mcu_checkpoint() -> bool {
         true
     }
@@ -788,6 +814,7 @@ impl BitStream for BitStreamHuffman {
             buffer:                  self.buffer,
             aligned_buffer:          self.aligned_buffer,
             bits_left:               self.bits_left,
+            reader_position:         self.reader_position,
             marker:                  self.marker,
             marker_bits:             self.marker_bits,
             marker_padding_consumed: self.marker_padding_consumed,
@@ -806,6 +833,7 @@ impl BitStream for BitStreamHuffman {
         self.buffer = state.buffer;
         self.aligned_buffer = state.aligned_buffer;
         self.bits_left = state.bits_left;
+        self.reader_position = state.reader_position;
         self.marker = state.marker;
         self.marker_bits = state.marker_bits;
         self.marker_padding_consumed = state.marker_padding_consumed;
@@ -879,6 +907,7 @@ impl BitStream for BitStreamHuffman {
             // byte at a time read
 
             if let Ok(bytes) = reader.read_fixed_bytes_or_error::<4>() {
+                self.reader_position += 4;
                 // we have 4 bytes to spare, read the 4 bytes into a temporary buffer
                 // create buffer
                 let msb_buf = u32::from_be_bytes(bytes);
@@ -892,6 +921,7 @@ impl BitStream for BitStreamHuffman {
                 }
 
                 reader.rewind(4)?;
+                self.reader_position -= 4;
             }
             for _ in 0..4 {
                 if !self.refill_byte::<T, false>(reader)? {
@@ -1098,8 +1128,11 @@ impl BitStream for BitStreamHuffman {
             }
         }
 
+        let bit = self.successive_low_mask;
         if self.get_bit() == 1 {
-            *block = block.wrapping_add(self.successive_low_mask);
+            // DC refinement sets a bit even for negative values; AC refinement
+            // instead increases the coefficient's magnitude.
+            *block |= bit;
         }
 
         Ok(())
@@ -1344,6 +1377,27 @@ const fn has_byte(b: u32, val: u8) -> bool {
     // Retrieved from Stanford bithacks
     // @ https://graphics.stanford.edu/~seander/bithacks.html#ZeroInWord
     has_zero(b ^ ((!0_u32 / 255) * (val as u32)))
+}
+
+#[cfg(test)]
+mod progressive_refinement_tests {
+    use zune_core::bytestream::{ZCursor, ZReader};
+
+    use super::{BitStream, BitStreamHuffman};
+
+    #[test]
+    fn dc_refinement_sets_signed_bits_idempotently() {
+        for (mut coefficient, expected) in [(-4, -2), (4, 6)] {
+            for _ in 0..2 {
+                let mut reader = ZReader::new(ZCursor::new([0x80, 0xFF, 0xD9]));
+                let mut stream = BitStreamHuffman::new_progressive(1, 0, 0);
+                stream
+                    .decode_prog_dc_refine(&mut reader, &mut coefficient)
+                    .unwrap();
+                assert_eq!(coefficient, expected);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
