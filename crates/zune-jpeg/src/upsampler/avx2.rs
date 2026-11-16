@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025.
+ * Copyright (c) 2023.
  *
  * This software is free software;
  *
@@ -11,201 +11,229 @@ use core::arch::x86::*;
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::*;
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[target_feature(enable = "avx2")]
 pub unsafe fn upsample_horizontal_avx2(
-    input: &[i16], _in_near: &[i16], _in_far: &[i16], _scratch: &mut [i16], output: &mut [i16]
+    input: &[i16], _near: &[i16], _far: &[i16], _scratch: &mut [i16], output: &mut [i16]
 ) {
     unsafe { upsample_horizontal_filtered::<2, 1, 2>(input, output) }
 }
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[target_feature(enable = "avx2")]
 unsafe fn upsample_horizontal_filtered<const SHIFT: i32, const EVEN: i16, const ODD: i16>(
     input: &[i16], output: &mut [i16]
 ) {
     assert_eq!(input.len() * 2, output.len());
     assert!(input.len() > 2);
-
     let len = input.len();
-
     if len < 18 {
         return super::scalar::upsample_horizontal_filtered::<SHIFT, EVEN, ODD>(input, output);
     }
-
-    // First two pixels
-    output[0] = (4 * input[0] + EVEN) >> SHIFT;
-    output[1] = (input[0] * 3 + input[1] + ODD) >> SHIFT;
-
-    let v_three = _mm256_set1_epi16(3);
-    let v_even_bias = _mm256_set1_epi16(EVEN);
-    let v_odd_bias = _mm256_set1_epi16(ODD);
-
-    let upsample16 = |input: &[i16; 18], output: &mut [i16; 32]| {
-        let in_ptr = input.as_ptr();
-        let out_ptr = output.as_mut_ptr();
-
-        // SAFETY: The input is 18 * 16 bit long, so the loads are safe.
-        let (v_prev, v_curr, v_next) = unsafe {
-            (
-                _mm256_loadu_si256(in_ptr.add(0).cast()),
-                _mm256_loadu_si256(in_ptr.add(1).cast()),
-                _mm256_loadu_si256(in_ptr.add(2).cast()),
-            )
-        };
-
-        let v_common = _mm256_mullo_epi16(v_curr, v_three);
-        let v_even = _mm256_srai_epi16::<SHIFT>(
-            _mm256_add_epi16(_mm256_add_epi16(v_common, v_prev), v_even_bias));
-        let v_odd = _mm256_srai_epi16::<SHIFT>(
-            _mm256_add_epi16(_mm256_add_epi16(v_common, v_next), v_odd_bias));
-
-        let v_res_1 = _mm256_unpacklo_epi16(v_even, v_odd);
-        let v_res_2 = _mm256_unpackhi_epi16(v_even, v_odd);
-
-        let v_final_1 = _mm256_permute2x128_si256(v_res_1, v_res_2, 0x20);
-        let v_final_2 = _mm256_permute2x128_si256(v_res_1, v_res_2, 0x31);
-
-        // SAFETY: The output is 32 * 16 bit long, so the stores are safe.
-        unsafe {
-            _mm256_storeu_si256(out_ptr.cast(), v_final_1);
-            _mm256_storeu_si256(out_ptr.add(16).cast(), v_final_2);
-        }
+    let three = _mm256_set1_epi16(3);
+    let even_bias = _mm256_set1_epi16(EVEN);
+    let odd_bias = _mm256_set1_epi16(ODD);
+    let ptr = input.as_ptr();
+    let out = unsafe { output.as_mut_ptr().add(2) };
+    let store = |previous, current, next, pos: usize| unsafe {
+        let common = _mm256_mullo_epi16(current, three);
+        let even = _mm256_srai_epi16::<SHIFT>(
+            _mm256_add_epi16(_mm256_add_epi16(common, previous), even_bias));
+        let odd = _mm256_srai_epi16::<SHIFT>(
+            _mm256_add_epi16(_mm256_add_epi16(common, next), odd_bias));
+        store_interleaved(out.add(pos * 2), even, odd);
     };
-
-    for (input, output) in input
-        .windows(18)
-        .step_by(16)
-        .zip(output[2..].chunks_exact_mut(32))
-    {
-        upsample16(input.try_into().unwrap(), output.try_into().unwrap());
+    let mut previous = unsafe { _mm256_loadu_si256(ptr.cast()) };
+    let mut pos = 0;
+    while pos + 32 <= len {
+        let next = unsafe { _mm256_loadu_si256(ptr.add(pos + 16).cast()) };
+        let middle = _mm256_permute2x128_si256::<0x21>(previous, next);
+        store(previous, _mm256_alignr_epi8::<2>(middle, previous),
+            _mm256_alignr_epi8::<4>(middle, previous), pos);
+        previous = next;
+        pos += 16;
     }
-
-    // Upsample the remainder. This may have some overlap, but that's fine.
-    if let Some(rest_input) = input.last_chunk::<18>() {
-        let end = output.len() - 2;
-        if let Some(rest_output) = output[..end].last_chunk_mut::<32>() {
-            upsample16(rest_input, rest_output);
-        }
-    }
-
-    // Last two pixels.
-    output[output.len() - 2] = (3 * input[len - 1] + input[len - 2] + EVEN) >> SHIFT;
-    output[output.len() - 1] = (4 * input[len - 1] + ODD) >> SHIFT;
+    let tail = |pos: usize| unsafe {
+        store(_mm256_loadu_si256(ptr.add(pos).cast()),
+            _mm256_loadu_si256(ptr.add(pos + 1).cast()),
+            _mm256_loadu_si256(ptr.add(pos + 2).cast()), pos);
+    };
+    let last = len - 18;
+    if pos < last { tail(pos); }
+    tail(last);
+    output[0] = (4 * input[0] + EVEN) >> SHIFT;
+    output[1] = (3 * input[0] + input[1] + ODD) >> SHIFT;
+    output[len * 2 - 2] = (3 * input[len - 1] + input[len - 2] + EVEN) >> SHIFT;
+    output[len * 2 - 1] = (4 * input[len - 1] + ODD) >> SHIFT;
 }
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "avx2")]
+unsafe fn store_interleaved(output: *mut i16, even: __m256i, odd: __m256i) {
+    let low = _mm256_unpacklo_epi16(even, odd);
+    let high = _mm256_unpackhi_epi16(even, odd);
+    unsafe {
+        _mm256_storeu_si256(output.cast(), _mm256_permute2x128_si256::<0x20>(low, high));
+        _mm256_storeu_si256(output.add(16).cast(), _mm256_permute2x128_si256::<0x31>(low, high));
+    }
+}
+
 #[target_feature(enable = "avx2")]
 pub unsafe fn upsample_vertical_avx2(
-    input: &[i16], in_near: &[i16], in_far: &[i16], _scratch: &mut [i16], output: &mut [i16]
+    input: &[i16], near: &[i16], far: &[i16], _scratch: &mut [i16], output: &mut [i16]
 ) {
-    unsafe { upsample_vertical_filtered::<true>(input, in_near, in_far, output) }
+    unsafe { upsample_vertical_filtered::<true>(input, near, far, output) }
 }
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[target_feature(enable = "avx2")]
 unsafe fn upsample_vertical_filtered<const ROUND: bool>(
-    input: &[i16], in_near: &[i16], in_far: &[i16], output: &mut [i16]
+    input: &[i16], near: &[i16], far: &[i16], output: &mut [i16]
 ) {
-    assert_eq!(input.len() * 2, output.len());
-    assert_eq!(in_near.len(), input.len());
-    assert_eq!(in_far.len(), input.len());
-
     let len = input.len();
-
+    assert_eq!(len * 2, output.len());
+    assert_eq!(near.len(), len);
+    assert_eq!(far.len(), len);
     if len < 16 {
-        return super::scalar::upsample_vertical_filtered::<ROUND>(input, in_near, in_far, output);
+        return super::scalar::upsample_vertical_filtered::<ROUND>(input, near, far, output);
     }
-
-    let middle = output.len() / 2;
-    let (out_top, out_bottom) = output.split_at_mut(middle);
-
-    let v_three = _mm256_set1_epi16(3);
-    let v_one = _mm256_set1_epi16(1);
-    let v_two = _mm256_set1_epi16(2);
-
-    let upsample16 = |input: &[i16; 16],
-                      in_near: &[i16; 16],
-                      in_far: &[i16; 16],
-                      out_top: &mut [i16; 16],
-                      out_bottom: &mut [i16; 16]| {
-        // SAFETY: Inputs are all 16 * 16 bit long, so the loads are safe.
-        let (v_in, v_near, v_far) = unsafe {
-            (
-                _mm256_loadu_si256(input.as_ptr().cast()),
-                _mm256_loadu_si256(in_near.as_ptr().cast()),
-                _mm256_loadu_si256(in_far.as_ptr().cast()),
-            )
-        };
-
-        let v_common = _mm256_mullo_epi16(v_in, v_three);
-        let top = _mm256_add_epi16(v_common, v_near);
-        let bottom = _mm256_add_epi16(v_common, v_far);
-        let v_out_top = if ROUND {
-            _mm256_srai_epi16::<2>(_mm256_add_epi16(top, v_one))
-        } else { top };
-        let v_out_bottom = if ROUND {
-            _mm256_srai_epi16::<2>(_mm256_add_epi16(bottom, v_two))
-        } else { bottom };
-
-        // SAFETY: Outputs are 16 * 16 bit long, so the stores are safe.
-        unsafe {
-            _mm256_storeu_si256(out_top.as_mut_ptr().cast(), v_out_top);
-            _mm256_storeu_si256(out_bottom.as_mut_ptr().cast(), v_out_bottom);
-        }
+    let three = _mm256_set1_epi16(3);
+    let one = _mm256_set1_epi16(1);
+    let two = _mm256_set1_epi16(2);
+    let (top, bottom) = output.split_at_mut(len);
+    let top_ptr = top.as_mut_ptr();
+    let bottom_ptr = bottom.as_mut_ptr();
+    let write = |pos: usize| unsafe {
+        let common = _mm256_mullo_epi16(_mm256_loadu_si256(input.as_ptr().add(pos).cast()), three);
+        let top_sum = _mm256_add_epi16(common, _mm256_loadu_si256(near.as_ptr().add(pos).cast()));
+        let bottom_sum = _mm256_add_epi16(common, _mm256_loadu_si256(far.as_ptr().add(pos).cast()));
+        let top_value = if ROUND { _mm256_srai_epi16::<2>(_mm256_add_epi16(top_sum, one)) } else { top_sum };
+        let bottom_value = if ROUND { _mm256_srai_epi16::<2>(_mm256_add_epi16(bottom_sum, two)) } else { bottom_sum };
+        _mm256_storeu_si256(top_ptr.add(pos).cast(), top_value);
+        _mm256_storeu_si256(bottom_ptr.add(pos).cast(), bottom_value);
     };
+    let mut pos = 0;
+    while pos + 16 <= len { write(pos); pos += 16; }
+    if pos < len { write(len - 16); }
+}
 
-    let chunks = input
-        .chunks_exact(16)
-        .zip(in_near.chunks_exact(16))
-        .zip(in_far.chunks_exact(16))
-        .zip(out_top.chunks_exact_mut(16))
-        .zip(out_bottom.chunks_exact_mut(16));
-
-    for ((((input, in_near), in_far), out_top), out_bottom) in chunks {
-        upsample16(
-            input.try_into().unwrap(),
-            in_near.try_into().unwrap(),
-            in_far.try_into().unwrap(),
-            out_top.try_into().unwrap(),
-            out_bottom.try_into().unwrap()
-        );
+#[target_feature(enable = "avx2")]
+pub unsafe fn upsample_hv_avx2(
+    input: &[i16], near: &[i16], far: &[i16], scratch: &mut [i16], output: &mut [i16]
+) {
+    let len = input.len();
+    assert_eq!(len * 4, output.len());
+    assert_eq!(near.len(), len);
+    assert_eq!(far.len(), len);
+    if len < 32 {
+        assert!(scratch.len() >= len * 2);
+        let scratch = &mut scratch[..len * 2];
+        unsafe { upsample_vertical_filtered::<false>(input, near, far, scratch) };
+        let (top, bottom) = output.split_at_mut(len * 2);
+        unsafe {
+            upsample_horizontal_filtered::<4, 8, 7>(&scratch[..len], top);
+            upsample_horizontal_filtered::<4, 8, 7>(&scratch[len..], bottom);
+        }
+        return;
     }
+    // Fuse vertical sums and horizontal interpolation without intermediate rounding.
+    let three = _mm256_set1_epi16(3);
+    let even_bias = _mm256_set1_epi16(8);
+    let odd_bias = _mm256_set1_epi16(7);
+    let (top, bottom) = output.split_at_mut(len * 2);
+    let top_ptr = top.as_mut_ptr();
+    let bottom_ptr = bottom.as_mut_ptr();
+    let sums = |pos: usize| unsafe {
+        let common = _mm256_mullo_epi16(_mm256_loadu_si256(input.as_ptr().add(pos).cast()), three);
+        (_mm256_add_epi16(common, _mm256_loadu_si256(near.as_ptr().add(pos).cast())),
+            _mm256_add_epi16(common, _mm256_loadu_si256(far.as_ptr().add(pos).cast())))
+    };
+    let pack = |out: *mut i16, previous, current, next| unsafe {
+        let common = _mm256_mullo_epi16(current, three);
+        let even = _mm256_srai_epi16::<4>(
+            _mm256_add_epi16(_mm256_add_epi16(common, previous), even_bias));
+        let odd = _mm256_srai_epi16::<4>(
+            _mm256_add_epi16(_mm256_add_epi16(common, next), odd_bias));
+        store_interleaved(out, even, odd);
+    };
+    let write = |pos: usize, previous: (__m256i, __m256i), current: (__m256i, __m256i), next: (__m256i, __m256i)| unsafe {
+        pack(top_ptr.add(2 + pos * 2), previous.0, current.0, next.0);
+        pack(bottom_ptr.add(2 + pos * 2), previous.1, current.1, next.1);
+    };
+    let mut previous = sums(0);
+    let mut pos = 0;
+    while pos + 32 <= len {
+        let next = sums(pos + 16);
+        let mid_top = _mm256_permute2x128_si256::<0x21>(previous.0, next.0);
+        let mid_bottom = _mm256_permute2x128_si256::<0x21>(previous.1, next.1);
+        write(pos, previous,
+            (_mm256_alignr_epi8::<2>(mid_top, previous.0), _mm256_alignr_epi8::<2>(mid_bottom, previous.1)),
+            (_mm256_alignr_epi8::<4>(mid_top, previous.0), _mm256_alignr_epi8::<4>(mid_bottom, previous.1)));
+        previous = next;
+        pos += 16;
+    }
+    let last = len - 18;
+    if pos < last { write(pos, sums(pos), sums(pos + 1), sums(pos + 2)); }
+    write(last, sums(last), sums(last + 1), sums(last + 2));
+    for (other, row) in [(near, top), (far, bottom)] {
+        let first = 3 * input[0] + other[0];
+        let second = 3 * input[1] + other[1];
+        row[0] = (4 * first + 8) >> 4;
+        row[1] = (3 * first + second + 7) >> 4;
+        let end = 3 * input[len - 1] + other[len - 1];
+        let before = 3 * input[len - 2] + other[len - 2];
+        row[len * 2 - 2] = (3 * end + before + 8) >> 4;
+        row[len * 2 - 1] = (4 * end + 7) >> 4;
+    }
+}
 
-    // Upsample the remainder. This may have some overlap, but that's fine.
-    // Edition upgrade will fix this nested awfulness.
-    if let Some(rest) = input.last_chunk::<16>() {
-        if let Some(rest_near) = in_near.last_chunk::<16>() {
-            if let Some(rest_far) = in_far.last_chunk::<16>() {
-                if let Some(mut rest_top) = out_top.last_chunk_mut::<16>() {
-                    if let Some(mut rest_bottom) = out_bottom.last_chunk_mut::<16>() {
-                        upsample16(rest, rest_near, rest_far, &mut rest_top, &mut rest_bottom);
+#[cfg(all(test, feature = "std"))]
+mod tests {
+    use super::*;
+    use crate::upsampler::scalar;
+
+    #[test]
+    fn sliding_windows_and_fused_hv_match_scalar() {
+        if !is_x86_feature_detected!("avx2") { return; }
+        for len in (3..=160).chain([256, 1280]) {
+            for pattern in 0..4 {
+                let row = |seed| -> Vec<i16> {
+                    (0..len).map(|x| match pattern {
+                        0 => 0,
+                        1 => 255,
+                        2 => if (x + seed) % 2 == 0 { 0 } else { 255 },
+                        _ => ((x * 79 + seed * 53) % 256) as i16
+                    }).collect()
+                };
+                let input = row(0);
+                let near = row(1);
+                let far = row(2);
+                for kind in 0..3 {
+                    let size = len * if kind == 2 { 4 } else { 2 };
+                    let mut actual = vec![-1234; size + 17];
+                    let mut expected = actual.clone();
+                    let mut scratch = vec![0; len * 2];
+                    let out = &mut actual[5..5 + size];
+                    let reference = &mut expected[5..5 + size];
+                    unsafe {
+                        match kind {
+                            0 => {
+                                scalar::upsample_horizontal(&input, &near, &far, &mut scratch, reference);
+                                upsample_horizontal_avx2(&input, &near, &far, &mut [], out);
+                            }
+                            1 => {
+                                scalar::upsample_vertical(&input, &near, &far, &mut scratch, reference);
+                                upsample_vertical_avx2(&input, &near, &far, &mut [], out);
+                            }
+                            _ => {
+                                scalar::upsample_hv(&input, &near, &far, &mut scratch, reference);
+                                if len >= 32 {
+                                    upsample_hv_avx2(&input, &near, &far, &mut [], out);
+                                } else {
+                                    upsample_hv_avx2(&input, &near, &far, &mut scratch, out);
+                                }
+                            }
+                        }
                     }
+                    assert_eq!(actual, expected, "len {len}, pattern {pattern}, kind {kind}");
                 }
             }
         }
-    }
-}
-
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-#[target_feature(enable = "avx2")]
-pub unsafe fn upsample_hv_avx2(
-    input: &[i16], in_near: &[i16], in_far: &[i16], scratch_space: &mut [i16], output: &mut [i16]
-) {
-    assert_eq!(input.len() * 4, output.len());
-    assert!(input.len() * 2 <= scratch_space.len());
-    let scratch_space = &mut scratch_space[..input.len() * 2];
-
-    unsafe { upsample_vertical_filtered::<false>(input, in_near, in_far, scratch_space) };
-
-    let scratch_half = scratch_space.len() / 2;
-    let output_half = output.len() / 2;
-
-    let (scratch_top, scratch_bottom) = scratch_space.split_at_mut(scratch_half);
-    let (out_top, out_bottom) = output.split_at_mut(output_half);
-
-    unsafe {
-        upsample_horizontal_filtered::<4, 8, 7>(scratch_top, out_top);
-        upsample_horizontal_filtered::<4, 8, 7>(scratch_bottom, out_bottom);
     }
 }
