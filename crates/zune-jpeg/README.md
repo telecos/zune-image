@@ -73,16 +73,29 @@ cargo run -p zune-jpeg --example scaled_decode -- image.jpg 2 > image.rgb
 
 ### Lossless JPEG
 
-`decode()` and `decode_into()` support original predictive, Huffman-coded JPEG
-(SOF3) with one component and 8-bit precision. This is not JPEG-LS or JPEG 2000.
-All seven predictors, point transforms 0 through 7, entropy byte stuffing and
-row-aligned restart intervals are supported. Samples are reconstructed directly,
-without quantization or an IDCT. Configure `ColorSpace::Luma` for one byte per
-pixel; packed RGB/BGR and grayscale/RGB formats with opaque alpha also work.
+`decode()` and `decode_into()` support original predictive JPEG with 8-bit
+grayscale or three-component, full-resolution interleaved YCbCr. Huffman coding
+(SOF3) is always available; arithmetic coding (SOF11) requires the existing
+`arith` feature. This is not JPEG-LS or JPEG 2000.
 
-Multicomponent lossless frames, other precisions, lossless arithmetic coding,
-DNL height discovery, raw planar output and scanline output remain unsupported
-and return errors. Header-only inspection of these encodings is unchanged.
+All seven predictors, point transforms 0 through 7, entropy byte stuffing and
+row-aligned restart intervals are supported. Each component has independent
+prediction history. Scan order and entropy table selectors are respected;
+arithmetic probability contexts are shared by conditioning selector, with
+lossless-specific horizontal/vertical residual classification and DAC defaults.
+Restart markers reset both prediction and arithmetic adaptation.
+
+Configure `ColorSpace::YCbCr` for exact reconstructed color component samples in
+SOF order, with a packed row stride of `width * 3`, or `ColorSpace::Luma` for Y.
+RGB/BGR and opaque-alpha variants use the crate's existing color conversion
+contract; component-lossless coding does not make that conversion reversible.
+Samples are reconstructed directly, without quantization, IDCT or minification.
+
+Color frames must use 1x1 sampling and one scan containing all three components.
+Split/non-interleaved scans, sampled color, lossless RGB/CMYK/YCCK, other
+precisions, DNL height discovery, raw planar output and scanline output remain
+unsupported and return errors. Existing grayscale frame-sampling behavior and
+header-only inspection are unchanged. Ordinary DCT interfaces are unaffected.
 
 Missing lossless entropy is an error, not synthesized pixel data, including in
 non-strict mode. Recoverable physical EOF can be retried on the same decoder and
