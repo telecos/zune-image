@@ -3844,6 +3844,9 @@ where
                         "Lossless JPEG supports decode and decode_into, not raw or scanline output"
                     ))
                 }
+                McuDecodeOutput::Scaled(_) => Err(DecodeErrors::FormatStatic(
+                    "Lossless JPEG does not support reduced-IDCT output"
+                ))
             };
         }
         if self.is_arithmetic {
