@@ -296,7 +296,7 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                 }
                 let mut converted = [0; 64];
                 let mut position = 0;
-                (self.color_convert_16)(
+                (self.color_convert_16.block)(
                     &planes[0],
                     &planes[1],
                     &planes[2],
