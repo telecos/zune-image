@@ -115,7 +115,69 @@ fn check_native_output_with_options(data: &[u8], expected: [u64; 7], options: De
 fn scaled_selection_after_scan_decode_is_rejected() {
     let data = include_bytes!("../../../test-images/jpeg/non_interleaved_420_64x64.jpg");
     let mut decoder = JpegDecoder::new(ZCursor::new(data.as_slice()));
-    decoder.decode().unwrap();
+    let original = decoder.decode().unwrap();
+    assert_eq!(decoder.decode().unwrap(), original);
+    assert!(matches!(
+        decoder.into_scaled(JpegScale::Half),
+        Err(DecodeErrors::FormatStatic(
+            "select output scaling before starting scan decoding"
+        ))
+    ));
+}
+
+#[test]
+fn scaled_selection_after_raw_decode_is_rejected() {
+    let data = include_bytes!("../../../test-images/jpeg/non_interleaved_420_64x64.jpg");
+    let mut decoder = JpegDecoder::new(ZCursor::new(data.as_slice()));
+    decoder.decode_headers().unwrap();
+    {
+        let mut raw = decoder.raw_output();
+        let layout = raw.layout().unwrap();
+        let count = raw.num_components().unwrap();
+        let mut planes: Vec<Vec<u8>> = (0..count)
+            .map(|index| vec![0; layout[index].byte_size])
+            .collect();
+        let mut refs: Vec<&mut [u8]> = planes.iter_mut().map(Vec::as_mut_slice).collect();
+        raw.decode_into_planes(&mut refs).unwrap();
+    }
+    assert!(matches!(
+        decoder.into_scaled(JpegScale::Half),
+        Err(DecodeErrors::FormatStatic(
+            "select output scaling before starting scan decoding"
+        ))
+    ));
+}
+
+#[test]
+fn scaled_selection_after_scanline_decode_is_rejected() {
+    let data = include_bytes!("../../../test-images/jpeg/non_interleaved_420_64x64.jpg");
+    let mut decoder = JpegDecoder::new(ZCursor::new(data.as_slice()));
+    {
+        let mut scanlines = decoder.scanline_output();
+        assert_eq!(scanlines.start().unwrap(), zune_jpeg::ScanlineStatus::Ready);
+        let row_bytes = scanlines.output_row_bytes().unwrap();
+        let mut output = vec![0; row_bytes * scanlines.output_height().unwrap()];
+        assert!(matches!(
+            scanlines.read_scanlines(&mut output, row_bytes).unwrap(),
+            zune_jpeg::ScanlineReadStatus::RowsProcessed { .. }
+        ));
+    }
+    assert!(matches!(
+        decoder.into_scaled(JpegScale::Half),
+        Err(DecodeErrors::FormatStatic(
+            "select output scaling before starting scan decoding"
+        ))
+    ));
+}
+
+#[test]
+fn scaled_selection_after_incomplete_scan_is_rejected() {
+    let data = include_bytes!("../../../test-images/jpeg/non_interleaved_420_64x64.jpg");
+    let sos = data.windows(2).position(|bytes| bytes == [255, 218]).unwrap();
+    let entropy = sos + 2 + usize::from(u16::from_be_bytes([data[sos + 2], data[sos + 3]]));
+    let options = DecoderOptions::default().set_strict_mode(true);
+    let mut decoder = JpegDecoder::new_with_options(ZCursor::new(&data[..entropy + 1]), options);
+    assert!(decoder.decode().is_err());
     assert!(matches!(
         decoder.into_scaled(JpegScale::Half),
         Err(DecodeErrors::FormatStatic(

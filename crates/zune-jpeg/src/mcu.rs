@@ -1552,6 +1552,10 @@ impl<T: ZByteReaderTrait> JpegDecoder<T> {
                             let idct_pos = component.raw_coeff.get_mut(idct_position..).unwrap();
                             let stride = component.width_stride;
 
+                            #[cfg(test)]
+                            {
+                                self.idct_calls += 1;
+                            }
                             if len <= 1 {
                                 let coeff = ((tmp[0].wrapping_add(1028)) >> 3).clamp(0, 255) as i16;
                                 let row_val = [coeff; 8];

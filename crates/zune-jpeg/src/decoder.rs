@@ -372,6 +372,9 @@ pub struct JpegDecoder<T> {
     // of this struct, we check if we can switch to a faster one which
     // depend on certain CPU extensions.
     pub(crate) idct_func: IDCTPtr,
+    /// Full-size block reconstructions, including inline DC and SIMD paths.
+    #[cfg(test)]
+    pub(crate) idct_calls: usize,
     /// Specialized IDCT when we can guarantee only few coefficients are non-zero.
     ///
     /// **The callee must uphold a contract**. See [`choose_idct_4x4_func`].
@@ -473,6 +476,8 @@ pub struct JpegDecoder<T> {
     /// condition needed for default checkpoint gating: a previous
     /// `decode_into` scan attempt actually ran.
     scan_decode_attempted:                       bool,
+    /// Remains set after success; replay bookkeeping must not unlock scaling.
+    scan_decode_started:                         bool,
     /// Scratch buffer that header marker parsers fill with the marker body
     /// before mutating decoder state.
     ///
@@ -2256,6 +2261,8 @@ where
             num_scans:                        0,
             scan_subsampled:                  false,
             idct_func:                        choose_idct_func(&options),
+            #[cfg(test)]
+            idct_calls:                       0,
             idct_4x4_func:                    choose_idct_4x4_func(&options),
             idct_1x1_func:                    choose_idct_1x1_func(&options),
             color_convert_16:                 color_convert,
@@ -2281,6 +2288,7 @@ where
             mcu_checkpoints_enabled:          false,
             incremental_mode:                 false,
             scan_decode_attempted:            false,
+            scan_decode_started:              false,
             progressive_mcus_buffer:          core::array::from_fn(|_| Vec::new()),
             baseline_coefficients:            core::array::from_fn(|_| Vec::new()),
             baseline_seen_components:         [false; MAX_COMPONENTS],
@@ -3822,6 +3830,7 @@ where
             }
         }
         self.scan_decode_attempted = true;
+        self.scan_decode_started = true;
 
         Ok(())
     }
@@ -3903,7 +3912,7 @@ where
     pub fn into_scaled(
         self, scale: crate::JpegScale
     ) -> Result<crate::ScaledJpegDecoder<T>, DecodeErrors> {
-        if self.scan_decode_attempted {
+        if self.scan_decode_started {
             return Err(DecodeErrors::FormatStatic(
                 "select output scaling before starting scan decoding"
             ));

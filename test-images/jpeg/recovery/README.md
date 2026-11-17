@@ -5,6 +5,8 @@
 partway through the second MCU. It contains no third-party image content.
 
 The generator is the `early_eoi` helper in the Huffman recovery integration
-tests. The same bytes exercise the unit test's IDCT call counter: raising
-only this authored control's declared height must not trigger IDCT work for
-missing MCUs. This is not a replacement for any external reproduction.
+tests. The same bytes exercise the unit test's per-decoder block-reconstruction
+counter, covering inline DC and SIMD output paths: raising only this authored
+control's declared height must not trigger IDCT work for missing MCUs. Scalar
+and SIMD output must agree, with exactly six reconstructed blocks and a neutral
+missing-row tail. This is not a replacement for any external reproduction.

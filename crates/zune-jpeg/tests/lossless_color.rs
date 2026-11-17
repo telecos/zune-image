@@ -350,6 +350,21 @@ fn unsupported_organizations_tables_and_resource_limits_do_not_write() {
 
 #[cfg(feature = "arith")]
 #[test]
+fn arithmetic_unused_conditioning_destination_preserves_pixels() {
+    let source = generated!("arith-3-p1.jpg");
+    let expected = JpegDecoder::new(ZCursor::new(source)).decode().unwrap();
+    let mut data = source.to_vec();
+    let dac = data
+        .windows(2)
+        .position(|bytes| bytes == [255, 204])
+        .unwrap();
+    // The scan still selects table 0, whose default conditioning is unchanged.
+    data[dac + 4] = 4;
+    assert_eq!(JpegDecoder::new(ZCursor::new(data)).decode().unwrap(), expected);
+}
+
+#[cfg(feature = "arith")]
+#[test]
 fn arithmetic_invalid_conditioning_markers_and_truncation_are_errors() {
     let source = generated!("arith-3-p1.jpg");
     let dac = source
@@ -361,7 +376,7 @@ fn arithmetic_invalid_conditioning_markers_and_truncation_are_errors() {
         .position(|bytes| bytes == [255, 218])
         .unwrap();
     for (at, value) in [
-        (dac + 4, 4),
+        (dac + 4, 0x20),
         (dac + 4, 0x10),
         (dac + 5, 0x12),
         (sos + 6, 0x40)
